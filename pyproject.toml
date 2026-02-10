@@ -1,0 +1,53 @@
+[project]
+name = "qwenimg2512"
+version = "0.1.0"
+description = "PySide6 GUI for Qwen-Image-2512 text-to-image generation"
+readme = { text = "", content-type = "text/markdown" }
+requires-python = ">=3.10"
+dependencies = [
+    "pyside6>=6.7",
+    "diffusers>=0.32.0",
+    "transformers>=4.47.0",
+    "accelerate>=1.2.0",
+    "safetensors",
+    "sentencepiece",
+    "bitsandbytes>=0.45.0",
+    "torch>=2.5.0",
+    "pillow>=10.0",
+    "gguf>=0.6.0",
+]
+
+[[tool.uv.index]]
+name = "pytorch"
+url = "https://download.pytorch.org/whl/cu129"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch" }
+
+[project.optional-dependencies]
+dev = [
+    "ruff>=0.14.0",
+]
+
+[project.scripts]
+qwenimg2512 = "qwenimg2512.__main__:main"
+
+[build-system]
+requires = ["uv_build>=0.9.8,<0.10.0"]
+build-backend = "uv_build"
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "SIM", "RUF"]
+ignore = [
+    "COM812",
+    "PLC0415",
+    "E501",
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["qwenimg2512"]
