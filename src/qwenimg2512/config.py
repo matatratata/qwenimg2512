@@ -34,15 +34,17 @@ MODEL_VARIANTS = {
     "GGUF Q8_0 (local)": "gguf_local",
 }
 
-_LMSTUDIO = Path.home() / ".lmstudio" / "models"
+_MODELS_DIR = Path.home() / "AI" / "Models"
 
 
 @dataclass
 class ModelPaths:
-    diffusion_gguf: str = str(_LMSTUDIO / "unsloth" / "Qwen-Image-2512-GGUF" / "qwen-image-2512-Q8_0.gguf")
-    vl_model: str = str(_LMSTUDIO / "unsloth" / "Qwen2.5-VL-7B-Instruct-GGUF" / "Qwen2.5-VL-7B-Instruct-UD-Q8_K_XL.gguf")
-    mmproj: str = str(_LMSTUDIO / "unsloth" / "Qwen2.5-VL-7B-Instruct-GGUF" / "mmproj-BF16.gguf")
-    vae: str = str(_LMSTUDIO / "unsloth" / "Qwen2.5-VL-7B-Instruct-GGUF" / "qwen_image_vae.safetensors")
+    diffusion_gguf: str = str(_MODELS_DIR / "Qwen-Image-2512-GGUF" / "qwen-image-2512-Q8_0.gguf")
+    vl_model: str = str(_MODELS_DIR / "Qwen2.5-VL-7B-Instruct-GGUF" / "Qwen2.5-VL-7B-Instruct-UD-Q8_K_XL.gguf")
+    mmproj: str = str(_MODELS_DIR / "Qwen2.5-VL-7B-Instruct-GGUF" / "mmproj-BF16.gguf")
+    vae: str = str(_MODELS_DIR / "Qwen2.5-VL-7B-Instruct-GGUF" / "qwen_image_vae.safetensors")
+    controlnet_path: str = str(_MODELS_DIR / "Qwen-Image-2512-Fun-Controlnet-Union" / "Qwen-Image-2512-Fun-Controlnet-Union-2602.safetensors")
+    base_model_dir: str = str(_MODELS_DIR / "Qwen-Image-2512")
 
 
 @dataclass
@@ -63,6 +65,12 @@ class GenerationSettings:
     lora_scale_end: float = 1.0
     lora_step_start: int = 0
     lora_step_end: int = -1
+    controlnet_enabled: bool = False
+    control_type: str = "canny"
+    control_image_path: str = ""
+    controlnet_conditioning_scale: float = 0.80
+    control_guidance_start: float = 0.0
+    control_guidance_end: float = 1.0
 
 
 @dataclass

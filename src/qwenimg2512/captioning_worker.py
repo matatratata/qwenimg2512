@@ -1,16 +1,18 @@
-"""Background worker for VL captioning via llama-cpp-python."""
+"""Background worker for VL captioning via local llama.cpp CLI."""
 
 from __future__ import annotations
 
-import base64
-import gc
 import logging
+import re
+import subprocess
 
 from PySide6.QtCore import QThread, Signal
 
 from qwenimg2512.config import ModelPaths
 
 logger = logging.getLogger(__name__)
+
+LLAMA_MTMD = "/home/matatrata/AI/llama.cpp/build/bin/llama-mtmd-cli"
 
 CAPTION_PROMPT = (
     "Describe this image in detail as a text-to-image generation prompt. "
@@ -20,7 +22,7 @@ CAPTION_PROMPT = (
 
 
 class CaptioningWorker(QThread):
-    """Runs Qwen2.5-VL captioning via llama-cpp-python in a background thread."""
+    """Runs Qwen2.5-VL captioning via llama-mtmd-cli subprocess."""
 
     caption_ready = Signal(str)  # generated caption
     stage_changed = Signal(str)  # status message
@@ -30,69 +32,93 @@ class CaptioningWorker(QThread):
         super().__init__()
         self._image_path = image_path
         self._model_paths = model_paths
+        self._process: subprocess.Popen | None = None
 
     def run(self) -> None:
-        model = None
         try:
-            self.stage_changed.emit("Loading VL model...")
-
-            from llama_cpp import Llama
-
-            model = Llama(
-                model_path=self._model_paths.vl_model,
-                chat_handler=None,
-                n_ctx=4096,
-                n_gpu_layers=-1,
-                verbose=False,
-            )
-
-            # Load mmproj for vision
-            from llama_cpp.llama_chat_format import Llava16ChatHandler
-
-            chat_handler = Llava16ChatHandler(clip_model_path=self._model_paths.mmproj)
-            model.chat_handler = chat_handler
-
             self.stage_changed.emit("Captioning image...")
 
-            # Read and encode image as base64 data URI
-            with open(self._image_path, "rb") as f:
-                image_data = base64.b64encode(f.read()).decode("utf-8")
+            cmd = [
+                LLAMA_MTMD,
+                "-m", self._model_paths.vl_model,
+                "--mmproj", self._model_paths.mmproj,
+                "--image", self._image_path,
+                "-p", CAPTION_PROMPT,
+                "-n", "512",
+                "--temp", "0.3",
+                "-ngl", "99",
+                "-c", "4096",
+            ]
 
-            # Determine mime type from extension
-            ext = self._image_path.rsplit(".", 1)[-1].lower()
-            mime_map = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg", "bmp": "image/bmp", "webp": "image/webp"}
-            mime_type = mime_map.get(ext, "image/png")
-            data_uri = f"data:{mime_type};base64,{image_data}"
+            logger.info("Running llama-mtmd-cli for captioning")
 
-            response = model.create_chat_completion(
-                messages=[
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "image_url", "image_url": {"url": data_uri}},
-                            {"type": "text", "text": CAPTION_PROMPT},
-                        ],
-                    }
-                ],
-                max_tokens=512,
-                temperature=0.3,
+            self._process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
             )
+            stdout, stderr = self._process.communicate(timeout=120)
 
-            caption = response["choices"][0]["message"]["content"].strip()
+            # llama-mtmd-cli writes generated text to stderr, mixed with logs.
+            # The caption appears after the last "image decoded" line and before
+            # "llama_perf_context_print". Extract it.
+            caption = self._extract_caption(stdout, stderr)
+
+            if not caption:
+                logger.error("Could not extract caption from output")
+                logger.error("stdout: %r", stdout[:500])
+                logger.error("stderr (tail): %r", stderr[-1000:])
+                self.error_occurred.emit(
+                    f"llama-mtmd-cli returned no caption (exit {self._process.returncode}). "
+                    "Check terminal logs for details."
+                )
+                return
+
             logger.info("Caption generated: %s", caption[:100])
             self.caption_ready.emit(caption)
 
+        except subprocess.TimeoutExpired:
+            if self._process:
+                self._process.kill()
+            self.error_occurred.emit("Captioning timed out (120s)")
         except Exception as e:
             logger.exception("Captioning failed")
             self.error_occurred.emit(str(e))
         finally:
-            del model
-            gc.collect()
-            try:
-                import torch
-
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
-            except Exception:
-                pass
+            self._process = None
             self.stage_changed.emit("Ready")
+
+    @staticmethod
+    def _extract_caption(stdout: str, stderr: str) -> str:
+        # Prefer stdout if it has meaningful content
+        if stdout.strip():
+            return stdout.strip()
+
+        # Extract from stderr: text between last "image decoded" line
+        # and "llama_perf_context_print"
+        text = stderr
+
+        # Cut after the last "image decoded" log line
+        match = re.search(r"image decoded[^\n]*\n", text)
+        if match:
+            text = text[match.end():]
+
+        # Cut before perf stats
+        perf_idx = text.find("llama_perf_context_print")
+        if perf_idx >= 0:
+            text = text[:perf_idx]
+
+        # Strip trailing special tokens
+        for tok in ("<|im_end|>", "<|endoftext|>", "[end of text]"):
+            text = text.split(tok)[0]
+
+        caption = text.strip()
+        # Remove any remaining log lines (they start with known prefixes)
+        lines = []
+        for line in caption.split("\n"):
+            if re.match(r"^(main:|llama_|ggml_|alloc_|warmup:|WARN:)", line):
+                continue
+            lines.append(line)
+
+        return "\n".join(lines).strip()

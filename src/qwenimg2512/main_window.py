@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
 
 from qwenimg2512.captioning_worker import CaptioningWorker
 from qwenimg2512.config import Config
+from qwenimg2512.widgets.controlnet_settings import ControlNetSettingsWidget
 from qwenimg2512.widgets.generation_controls import GenerationControlsWidget
 from qwenimg2512.widgets.image_input import ImageInputWidget
 from qwenimg2512.widgets.image_preview import ImagePreviewWidget
@@ -27,7 +28,7 @@ from qwenimg2512.widgets.image_settings import ImageSettingsWidget
 from qwenimg2512.widgets.lora_settings import LoraSettingsWidget
 from qwenimg2512.widgets.model_paths_dialog import ModelPathsDialog
 from qwenimg2512.widgets.prompt_input import PromptInputWidget
-from qwenimg2512.worker import GenerationWorker
+from qwenimg2512.worker import GenerationWorker, resize_and_center_crop
 
 logger = logging.getLogger(__name__)
 
@@ -40,12 +41,13 @@ class MainWindow(QMainWindow):
         self._captioning_worker: CaptioningWorker | None = None
         self._setup_ui()
         self._setup_menu()
+        self._connect_fit_preview()
         self._load_settings()
 
     def _setup_ui(self) -> None:
         self.setWindowTitle("Qwen-Image-2512")
-        self.setMinimumSize(1000, 700)
-        self.resize(1280, 800)
+        self.setMinimumSize(1200, 1000)
+        self.resize(1280, 1280)
 
         central = QWidget()
         self.setCentralWidget(central)
@@ -79,6 +81,10 @@ class MainWindow(QMainWindow):
 
         self.lora_widget = LoraSettingsWidget()
         scroll_layout.addWidget(self.lora_widget)
+
+        self.controlnet_widget = ControlNetSettingsWidget()
+        self.controlnet_widget.enable_check.toggled.connect(self._on_controlnet_toggled)
+        scroll_layout.addWidget(self.controlnet_widget)
 
         self.gen_controls = GenerationControlsWidget()
         self.gen_controls.generate_clicked.connect(self._start_generation)
@@ -146,6 +152,14 @@ class MainWindow(QMainWindow):
         self.lora_widget.set_step_start(gs.lora_step_start)
         self.lora_widget.set_step_end(gs.lora_step_end)
 
+        # ControlNet settings
+        self.controlnet_widget.set_enabled(gs.controlnet_enabled)
+        self.controlnet_widget.set_control_type(gs.control_type)
+        self.controlnet_widget.set_control_image_path(gs.control_image_path)
+        self.controlnet_widget.set_conditioning_scale(gs.controlnet_conditioning_scale)
+        self.controlnet_widget.set_guidance_start(gs.control_guidance_start)
+        self.controlnet_widget.set_guidance_end(gs.control_guidance_end)
+
     def _collect_settings(self) -> None:
         gs = self._config.generation
         gs.prompt = self.prompt_widget.get_prompt()
@@ -164,6 +178,12 @@ class MainWindow(QMainWindow):
         gs.lora_scale_end = self.lora_widget.get_scale_end()
         gs.lora_step_start = self.lora_widget.get_step_start()
         gs.lora_step_end = self.lora_widget.get_step_end()
+        gs.controlnet_enabled = self.controlnet_widget.is_enabled()
+        gs.control_type = self.controlnet_widget.get_control_type()
+        gs.control_image_path = self.controlnet_widget.get_control_image_path()
+        gs.controlnet_conditioning_scale = self.controlnet_widget.get_conditioning_scale()
+        gs.control_guidance_start = self.controlnet_widget.get_guidance_start()
+        gs.control_guidance_end = self.controlnet_widget.get_guidance_end()
 
     def _save_settings(self) -> None:
         self._collect_settings()
@@ -228,6 +248,14 @@ class MainWindow(QMainWindow):
     def _on_vram(self, gb: float) -> None:
         self.gen_controls.set_vram(gb)
 
+    # --- ControlNet ---
+
+    def _on_controlnet_toggled(self, enabled: bool) -> None:
+        if enabled:
+            self.statusBar().showMessage("ControlNet enabled")
+        else:
+            self.statusBar().showMessage("ControlNet disabled")
+
     # --- Image input ---
 
     def _on_image_loaded(self, path: str) -> None:
@@ -235,6 +263,38 @@ class MainWindow(QMainWindow):
 
     def _on_image_cleared(self) -> None:
         self.statusBar().showMessage("Input image cleared (txt2img mode)")
+
+    # --- Fit preview ---
+
+    def _connect_fit_preview(self) -> None:
+        self.settings_widget.ratio_combo.currentTextChanged.connect(lambda: self._update_fit_preview())
+        self.image_input.image_loaded.connect(lambda _: self._update_fit_preview())
+        self.image_input.image_cleared.connect(self._update_fit_preview)
+        self.controlnet_widget.settings_changed.connect(self._update_fit_preview)
+
+    def _update_fit_preview(self) -> None:
+        from PIL import Image
+
+        target_w, target_h = self.settings_widget.get_resolution()
+        images: list[tuple[Image.Image, str]] = []
+
+        input_path = self.image_input.get_image_path()
+        if input_path and Path(input_path).is_file():
+            img = Image.open(input_path).convert("RGB")
+            cropped = resize_and_center_crop(img, target_w, target_h)
+            images.append((cropped, "Input"))
+
+        if self.controlnet_widget.is_enabled():
+            cn_path = self.controlnet_widget.get_control_image_path()
+            if cn_path and Path(cn_path).is_file():
+                img = Image.open(cn_path).convert("RGB")
+                cropped = resize_and_center_crop(img, target_w, target_h)
+                images.append((cropped, "Control"))
+
+        if images:
+            self.preview_widget.show_fit_preview(images, target_w, target_h)
+        else:
+            self.preview_widget.clear_fit_preview()
 
     # --- Captioning ---
 
