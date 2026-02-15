@@ -60,6 +60,7 @@ class GenerationSettings:
     output_dir: str = str(Path.home() / "Pictures" / "qwenimg2512")
     input_image_path: str = ""
     img2img_strength: float = 0.7
+    alpha_fill: str = "grey"
     lora_path: str = ""
     lora_scale_start: float = 1.0
     lora_scale_end: float = 1.0

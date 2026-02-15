@@ -28,22 +28,25 @@ class CaptioningWorker(QThread):
     stage_changed = Signal(str)  # status message
     error_occurred = Signal(str)  # error message
 
-    def __init__(self, image_path: str, model_paths: ModelPaths) -> None:
+    def __init__(self, image_path: str, model_paths: ModelPaths, custom_prompt: str | None = None) -> None:
         super().__init__()
         self._image_path = image_path
         self._model_paths = model_paths
+        self._custom_prompt = custom_prompt
         self._process: subprocess.Popen | None = None
 
     def run(self) -> None:
         try:
             self.stage_changed.emit("Captioning image...")
 
+            prompt_to_use = self._custom_prompt or CAPTION_PROMPT
+
             cmd = [
                 LLAMA_MTMD,
                 "-m", self._model_paths.vl_model,
                 "--mmproj", self._model_paths.mmproj,
                 "--image", self._image_path,
-                "-p", CAPTION_PROMPT,
+                "-p", prompt_to_use,
                 "-n", "512",
                 "--temp", "0.3",
                 "-ngl", "99",

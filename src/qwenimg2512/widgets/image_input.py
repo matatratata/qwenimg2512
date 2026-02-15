@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QPushButton,
     QVBoxLayout,
+    QComboBox,
 )
 
 
@@ -21,6 +22,7 @@ class ImageInputWidget(QGroupBox):
     image_cleared = Signal()
     caption_requested = Signal(str)  # image path
     strength_changed = Signal(float)
+    alpha_fill_changed = Signal(str)
 
     def __init__(self) -> None:
         super().__init__("Input Image (img2img)")
@@ -71,6 +73,27 @@ class ImageInputWidget(QGroupBox):
         self.strength_spin.valueChanged.connect(self.strength_changed.emit)
         self.strength_row.addWidget(self.strength_spin, 1)
 
+        # Alpha fill combo
+        self.alpha_label = QLabel("Alpha Fill:")
+        self.strength_row.addWidget(self.alpha_label)
+        self.alpha_combo = QComboBox()
+        self.alpha_combo.addItems([
+            "Grey", 
+            "White", 
+            "Noise", 
+            "Edge Inpaint", 
+            "Noise + Edge (80/20)"
+        ])
+        # Map internal values
+        self.alpha_combo.setItemData(0, "grey")
+        self.alpha_combo.setItemData(1, "white")
+        self.alpha_combo.setItemData(2, "noise")
+        self.alpha_combo.setItemData(3, "edge_inpaint")
+        self.alpha_combo.setItemData(4, "noise_edge_blend")
+        self.alpha_combo.setToolTip("How to fill transparent areas in PNG images")
+        self.alpha_combo.currentTextChanged.connect(lambda t: self.alpha_fill_changed.emit(self.get_alpha_fill()))
+        self.strength_row.addWidget(self.alpha_combo, 1)
+
         self.strength_widget = QLabel()  # placeholder for layout
         layout.addLayout(self.strength_row)
 
@@ -80,6 +103,8 @@ class ImageInputWidget(QGroupBox):
         self.clear_btn.setEnabled(has_image)
         self.strength_label.setVisible(has_image)
         self.strength_spin.setVisible(has_image)
+        self.alpha_label.setVisible(has_image)
+        self.alpha_combo.setVisible(has_image)
 
     def _browse_image(self) -> None:
         from PySide6.QtWidgets import QFileDialog
@@ -129,6 +154,14 @@ class ImageInputWidget(QGroupBox):
     def set_captioning(self, active: bool) -> None:
         self.caption_btn.setEnabled(not active)
         self.caption_btn.setText("Captioning..." if active else "Caption")
+
+    def get_alpha_fill(self) -> str:
+        return self.alpha_combo.currentData()
+
+    def set_alpha_fill(self, value: str) -> None:
+        idx = self.alpha_combo.findData(value)
+        if idx >= 0:
+            self.alpha_combo.setCurrentIndex(idx)
 
     def dragEnterEvent(self, event: QDragEnterEvent) -> None:
         if event.mimeData().hasUrls():

@@ -14,6 +14,15 @@ from qwenimg2512.config import ASPECT_RATIOS, MODEL_VARIANTS, GenerationSettings
 
 logger = logging.getLogger(__name__)
 
+try:
+    import cv2
+    import numpy as np
+    HAS_CV2 = True
+except ImportError:
+    HAS_CV2 = False
+    logger.warning("OpenCV not found, edge inpaint alpha fill will fall back to grey")
+
+
 
 def resize_and_center_crop(image: object, width: int, height: int) -> object:
     """Resize a PIL Image to cover (width, height) preserving aspect ratio, then center crop."""
@@ -29,6 +38,84 @@ def resize_and_center_crop(image: object, width: int, height: int) -> object:
     left = (new_w - width) // 2
     top = (new_h - height) // 2
     return image.crop((left, top, left + width, top + height))
+
+
+def load_image_with_alpha_fill(path: str, fill_mode: str = "grey") -> object:
+    """Load an image and fill transparent areas based on the specified mode.
+
+    Modes:
+        - "white": Fill with white (255, 255, 255)
+        - "grey": Fill with grey (128, 128, 128)
+        - "noise": Fill with uniform random noise
+        - "edge_inpaint": extend edges usage cv2.inpaint
+        - "noise_edge_blend": 80% noise + 20% edge_inpaint
+    """
+    from PIL import Image
+
+    if not Path(path).is_file():
+        raise FileNotFoundError(f"Image not found: {path}")
+
+    img = Image.open(path)
+    if img.mode != "RGBA" and "A" not in img.mode:
+        return img.convert("RGB")
+
+    # If simple color modes, use PIL compositing
+    if fill_mode == "white":
+        bg = Image.new("RGB", img.size, (255, 255, 255))
+        bg.paste(img, mask=img.split()[-1])
+        return bg
+    elif fill_mode == "grey":
+        bg = Image.new("RGB", img.size, (128, 128, 128))
+        bg.paste(img, mask=img.split()[-1])
+        return bg
+
+    # Complex modes require numpy/cv2
+    if not HAS_CV2:
+        # Fallback to grey
+        bg = Image.new("RGB", img.size, (128, 128, 128))
+        bg.paste(img, mask=img.split()[-1])
+        return bg
+
+    # Convert to numpy (RGBA)
+    arr = np.array(img.convert("RGBA"))
+    alpha = arr[:, :, 3]
+    rgb = arr[:, :, :3]
+    mask = (alpha < 255).astype(np.uint8) * 255  # 255 where transparent
+
+    if fill_mode == "noise":
+        noise = np.random.randint(0, 256, rgb.shape, dtype=np.uint8)
+        # Combine: where alpha is opaque keep rgb, else noise
+        # Actually easier: just fill noise everywhere then paste rgb on top
+        # But let's do mask math for clarity
+        # alpha is 0..255. Let's threshold strict 255 for "opaque" vs "transparent"
+        # or just composite properly using alpha channel
+        fill = noise
+    elif fill_mode == "edge_inpaint":
+        # cv2.inpaint requires BGR
+        bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+        # Inpaint where mask is 255
+        inpainted_bgr = cv2.inpaint(bgr, mask, 3, cv2.INPAINT_TELEA)
+        fill = cv2.cvtColor(inpainted_bgr, cv2.COLOR_BGR2RGB)
+    elif fill_mode == "noise_edge_blend":
+        bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+        inpainted_bgr = cv2.inpaint(bgr, mask, 3, cv2.INPAINT_TELEA)
+        inpainted_rgb = cv2.cvtColor(inpainted_bgr, cv2.COLOR_BGR2RGB)
+        
+        noise = np.random.randint(0, 256, rgb.shape, dtype=np.uint8)
+        # 80% noise, 20% inpaint
+        fill = cv2.addWeighted(noise, 0.8, inpainted_rgb, 0.2, 0)
+    else:
+        # Unknown mode, fallback to grey
+        return load_image_with_alpha_fill(path, "grey")
+
+    # Composite: output = rgb * alpha + fill * (1 - alpha)
+    # Normalize alpha to 0..1
+    norm_alpha = alpha.astype(float) / 255.0
+    norm_alpha = np.stack([norm_alpha] * 3, axis=-1)
+
+    out = rgb.astype(float) * norm_alpha + fill.astype(float) * (1 - norm_alpha)
+    return Image.fromarray(out.astype(np.uint8))
+
 
 
 class GenerationCancelledException(Exception):
@@ -180,7 +267,9 @@ class GenerationWorker(QThread):
         if is_img2img:
             from PIL import Image
 
-            input_image = Image.open(self._settings.input_image_path).convert("RGB")
+            input_image = load_image_with_alpha_fill(
+                self._settings.input_image_path, self._settings.alpha_fill
+            )
             input_image = resize_and_center_crop(input_image, width, height)
             gen_kwargs["image"] = input_image
             gen_kwargs["strength"] = self._settings.img2img_strength
@@ -355,7 +444,7 @@ class GenerationWorker(QThread):
         from diffusers.image_processor import VaeImageProcessor
         from PIL import Image
 
-        image = Image.open(image_path).convert("RGB")
+        image = load_image_with_alpha_fill(image_path, self._settings.alpha_fill)
         image = resize_and_center_crop(image, width, height)
         base_model = self._model_paths.base_model_dir or "Qwen/Qwen-Image-2512"
 

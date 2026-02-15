@@ -58,3 +58,10 @@ class PromptInputWidget(QGroupBox):
 
     def set_negative_prompt(self, text: str) -> None:
         self.negative_input.setPlainText(text)
+
+    def append_to_prompt(self, text: str) -> None:
+        current = self.get_prompt()
+        if current:
+            self.positive_input.setPlainText(f"{current}\n{text}")
+        else:
+            self.positive_input.setPlainText(text)

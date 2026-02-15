@@ -28,7 +28,11 @@ from qwenimg2512.widgets.image_settings import ImageSettingsWidget
 from qwenimg2512.widgets.lora_settings import LoraSettingsWidget
 from qwenimg2512.widgets.model_paths_dialog import ModelPathsDialog
 from qwenimg2512.widgets.prompt_input import PromptInputWidget
-from qwenimg2512.worker import GenerationWorker, resize_and_center_crop
+from qwenimg2512.worker import (
+    GenerationWorker, 
+    load_image_with_alpha_fill, 
+    resize_and_center_crop
+)
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +43,8 @@ class MainWindow(QMainWindow):
         self._config = Config.load()
         self._worker: GenerationWorker | None = None
         self._captioning_worker: CaptioningWorker | None = None
+        self._caption_context: str = "input"  # "input" or "controlnet"
+        self._control_caption_type: str = ""
         self._setup_ui()
         self._setup_menu()
         self._connect_fit_preview()
@@ -84,6 +90,7 @@ class MainWindow(QMainWindow):
 
         self.controlnet_widget = ControlNetSettingsWidget()
         self.controlnet_widget.enable_check.toggled.connect(self._on_controlnet_toggled)
+        self.controlnet_widget.caption_requested.connect(self._start_controlnet_captioning)
         scroll_layout.addWidget(self.controlnet_widget)
 
         self.gen_controls = GenerationControlsWidget()
@@ -144,6 +151,7 @@ class MainWindow(QMainWindow):
         self.image_input.set_strength(gs.img2img_strength)
         if gs.input_image_path and Path(gs.input_image_path).is_file():
             self.image_input.set_image(gs.input_image_path)
+        self.image_input.set_alpha_fill(gs.alpha_fill)
 
         # LoRA settings
         self.lora_widget.set_lora_path(gs.lora_path)
@@ -173,6 +181,7 @@ class MainWindow(QMainWindow):
         gs.output_dir = self.gen_controls.get_output_dir()
         gs.input_image_path = self.image_input.get_image_path()
         gs.img2img_strength = self.image_input.get_strength()
+        gs.alpha_fill = self.image_input.get_alpha_fill()
         gs.lora_path = self.lora_widget.get_lora_path()
         gs.lora_scale_start = self.lora_widget.get_scale_start()
         gs.lora_scale_end = self.lora_widget.get_scale_end()
@@ -271,6 +280,7 @@ class MainWindow(QMainWindow):
         self.image_input.image_loaded.connect(lambda _: self._update_fit_preview())
         self.image_input.image_cleared.connect(self._update_fit_preview)
         self.controlnet_widget.settings_changed.connect(self._update_fit_preview)
+        self.image_input.alpha_fill_changed.connect(lambda _: self._update_fit_preview())
 
     def _update_fit_preview(self) -> None:
         from PIL import Image
@@ -280,14 +290,18 @@ class MainWindow(QMainWindow):
 
         input_path = self.image_input.get_image_path()
         if input_path and Path(input_path).is_file():
-            img = Image.open(input_path).convert("RGB")
+            fill_mode = self.image_input.get_alpha_fill()
+            img = load_image_with_alpha_fill(input_path, fill_mode)
             cropped = resize_and_center_crop(img, target_w, target_h)
             images.append((cropped, "Input"))
 
         if self.controlnet_widget.is_enabled():
             cn_path = self.controlnet_widget.get_control_image_path()
             if cn_path and Path(cn_path).is_file():
-                img = Image.open(cn_path).convert("RGB")
+                # ControlNet also respects the alpha fill setting for now, 
+                # or we could default to grey/black. Let's use the setting.
+                fill_mode = self.image_input.get_alpha_fill()
+                img = load_image_with_alpha_fill(cn_path, fill_mode)
                 cropped = resize_and_center_crop(img, target_w, target_h)
                 images.append((cropped, "Control"))
 
@@ -303,6 +317,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Busy", "Please wait for the current operation to finish.")
             return
 
+        self._caption_context = "input"
         self.image_input.set_captioning(True)
         self.statusBar().showMessage("Captioning...")
 
@@ -312,18 +327,61 @@ class MainWindow(QMainWindow):
         self._captioning_worker.error_occurred.connect(self._on_caption_error)
         self._captioning_worker.start()
 
+    def _start_controlnet_captioning(self, image_path: str, control_type: str) -> None:
+        if self._is_busy():
+            QMessageBox.warning(self, "Busy", "Please wait for the current operation to finish.")
+            return
+
+        self._caption_context = "controlnet"
+        self._control_caption_type = control_type
+        self.controlnet_widget.set_captioning(True)
+        self.statusBar().showMessage(f"Captioning {control_type}...")
+
+        prompt = (
+            f"Describe the {control_type} clearly. "
+            "Focus on the main subject's pose, position, action. "
+            "Do not describe colors, lighting, or style. "
+            "Output only the description."
+        )
+
+        self._captioning_worker = CaptioningWorker(
+            image_path,
+            self._config.model_paths,
+            custom_prompt=prompt
+        )
+        self._captioning_worker.caption_ready.connect(self._on_caption_ready)
+        self._captioning_worker.stage_changed.connect(self._on_caption_stage)
+        self._captioning_worker.error_occurred.connect(self._on_caption_error)
+        self._captioning_worker.start()
+
     def _on_caption_ready(self, caption: str) -> None:
-        self.image_input.set_captioning(False)
-        self.prompt_widget.set_prompt(caption)
-        self.statusBar().showMessage("Caption generated")
+        if self._caption_context == "controlnet":
+            # Format: "{control_type}: {caption}"
+            # Ensure control type is lower case for the prefix
+            prefix = self._control_caption_type.lower()
+            formatted = f"{prefix}: {caption}"
+            self.controlnet_widget.set_captioning(False)
+            self.prompt_widget.append_to_prompt(formatted)
+            self.statusBar().showMessage(f"ControlNet caption appended")
+        else:
+            self.image_input.set_captioning(False)
+            self.prompt_widget.set_prompt(caption)
+            self.statusBar().showMessage("Caption generated")
+
+        self._captioning_worker = None
 
     def _on_caption_stage(self, stage: str) -> None:
         self.statusBar().showMessage(stage)
 
     def _on_caption_error(self, error: str) -> None:
-        self.image_input.set_captioning(False)
+        if self._caption_context == "controlnet":
+            self.controlnet_widget.set_captioning(False)
+        else:
+            self.image_input.set_captioning(False)
+
         self.statusBar().showMessage(f"Caption error: {error}")
         QMessageBox.critical(self, "Captioning Error", error)
+        self._captioning_worker = None
 
     # --- Model paths ---
 
