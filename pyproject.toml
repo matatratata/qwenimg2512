@@ -15,6 +15,7 @@ dependencies = [
     "torch>=2.5.0",
     "pillow>=10.0",
     "gguf>=0.6.0",
+    "opencv-python",
 ]
 
 [[tool.uv.index]]

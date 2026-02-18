@@ -39,6 +39,8 @@ class ModelPathsDialog(QDialog):
             "mmproj": "Vision Projector (mmproj):",
             "vae": "VAE:",
             "controlnet_path": "ControlNet Union:",
+            "edit_gguf": "Edit 2511 GGUF:",
+            "llama_cpp_cli": "llama-mtmd-cli Path:",
         }
 
         filters = {
@@ -47,6 +49,8 @@ class ModelPathsDialog(QDialog):
             "mmproj": "GGUF Files (*.gguf)",
             "vae": "SafeTensors Files (*.safetensors)",
             "controlnet_path": "SafeTensors Files (*.safetensors)",
+            "edit_gguf": "GGUF Files (*.gguf)",
+            "llama_cpp_cli": "All Files (*)",
         }
 
         for field_name, label_text in labels.items():
@@ -102,6 +106,34 @@ class ModelPathsDialog(QDialog):
         status.setObjectName("status_base_model_dir")
         layout.addWidget(status)
         self._validate_dir("base_model_dir", self._model_paths.base_model_dir)
+
+        # Edit-2511 Base model directory
+        layout.addWidget(QLabel(""))
+        hint_edit = QLabel("Edit-2511 Base model directory (optional):")
+        hint_edit.setToolTip(
+            "Local directory containing the Qwen-Image-Edit-2511 model components. "
+            "Used for the Edit tab."
+        )
+        layout.addWidget(hint_edit)
+        row_edit = QHBoxLayout()
+        edit_dir = QLineEdit()
+        edit_dir.setText(self._model_paths.edit_base_model_dir)
+        edit_dir.setPlaceholderText("Leave empty to download from HuggingFace")
+        edit_dir.textChanged.connect(lambda text: self._validate_dir("edit_base_model_dir", text))
+        row_edit.addWidget(edit_dir, 1)
+        self._fields["edit_base_model_dir"] = edit_dir
+
+        browse_btn_edit = QPushButton("...")
+        browse_btn_edit.setMaximumWidth(40)
+        browse_btn_edit.clicked.connect(lambda checked=False, e=edit_dir: self._browse_dir(e))
+        row_edit.addWidget(browse_btn_edit)
+        layout.addLayout(row_edit)
+
+        status_edit = QLabel()
+        status_edit.setProperty("class", "muted")
+        status_edit.setObjectName("status_edit_base_model_dir")
+        layout.addWidget(status_edit)
+        self._validate_dir("edit_base_model_dir", self._model_paths.edit_base_model_dir)
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         buttons.accepted.connect(self._apply_and_accept)

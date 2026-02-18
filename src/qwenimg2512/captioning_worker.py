@@ -12,8 +12,6 @@ from qwenimg2512.config import ModelPaths
 
 logger = logging.getLogger(__name__)
 
-LLAMA_MTMD = "/home/matatrata/AI/llama.cpp/build/bin/llama-mtmd-cli"
-
 CAPTION_PROMPT = (
     "Describe this image in detail as a text-to-image generation prompt. "
     "Include subject, composition, lighting, style, colors, and mood. "
@@ -35,6 +33,12 @@ class CaptioningWorker(QThread):
         self._custom_prompt = custom_prompt
         self._process: subprocess.Popen | None = None
 
+    def cancel(self) -> None:
+        """Kill the captioning subprocess if running."""
+        if self._process:
+            self._process.kill()
+            self._process.wait()
+
     def run(self) -> None:
         try:
             self.stage_changed.emit("Captioning image...")
@@ -42,7 +46,7 @@ class CaptioningWorker(QThread):
             prompt_to_use = self._custom_prompt or CAPTION_PROMPT
 
             cmd = [
-                LLAMA_MTMD,
+                self._model_paths.llama_cpp_cli,
                 "-m", self._model_paths.vl_model,
                 "--mmproj", self._model_paths.mmproj,
                 "--image", self._image_path,

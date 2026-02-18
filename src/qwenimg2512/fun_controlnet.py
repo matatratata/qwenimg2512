@@ -180,11 +180,15 @@ class QwenImageFunControlNetModel(nn.Module):
         if hint_tokens.shape[0] != batch_size:
             hint_tokens = hint_tokens.expand(batch_size, -1, -1)
 
-        # Truncate hint_tokens to match hidden_states sequence length if needed
-        if hint_tokens.shape[1] != projected_hs.shape[1]:
-            max_tokens = min(hint_tokens.shape[1], projected_hs.shape[1])
-            hint_tokens = hint_tokens[:, :max_tokens]
-            projected_hs = projected_hs[:, :max_tokens]
+        # Pad or truncate hint_tokens to match projected_hs sequence length.
+        # Never truncate projected_hs — residuals must match the main model's
+        # sequence length or post-hook addition will crash.
+        seq_len = projected_hs.shape[1]
+        if hint_tokens.shape[1] < seq_len:
+            pad_len = seq_len - hint_tokens.shape[1]
+            hint_tokens = F.pad(hint_tokens, (0, 0, 0, pad_len))
+        elif hint_tokens.shape[1] > seq_len:
+            hint_tokens = hint_tokens[:, :seq_len]
 
         # --- ControlNet-specific processing ---
         # Project hint tokens: (B, seq, 132) → (B, seq, 3072)
@@ -349,11 +353,13 @@ def setup_fun_controlnet_hooks(
             state["residuals"] = None
             return
 
-        # Capture the already-projected inputs from block kwargs
-        projected_hs = kwargs.get("hidden_states")
-        enc_hs = kwargs.get("encoder_hidden_states")
-        temb = kwargs.get("temb")
-        image_rotary_emb = kwargs.get("image_rotary_emb")
+        # Capture the already-projected inputs from block kwargs,
+        # with positional fallbacks for diffusers versions that pass
+        # these as args instead of kwargs.
+        projected_hs = kwargs.get("hidden_states", args[0] if len(args) > 0 else None)
+        enc_hs = kwargs.get("encoder_hidden_states", args[1] if len(args) > 1 else None)
+        temb = kwargs.get("temb", args[2] if len(args) > 2 else None)
+        image_rotary_emb = kwargs.get("image_rotary_emb", args[3] if len(args) > 3 else None)
 
         if projected_hs is None or enc_hs is None or temb is None:
             logger.warning("Could not extract block inputs for ControlNet")

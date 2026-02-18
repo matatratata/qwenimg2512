@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import logging
 from dataclasses import asdict, dataclass, field
@@ -45,6 +46,9 @@ class ModelPaths:
     vae: str = str(_MODELS_DIR / "Qwen2.5-VL-7B-Instruct-GGUF" / "qwen_image_vae.safetensors")
     controlnet_path: str = str(_MODELS_DIR / "Qwen-Image-2512-Fun-Controlnet-Union" / "Qwen-Image-2512-Fun-Controlnet-Union-2602.safetensors")
     base_model_dir: str = str(_MODELS_DIR / "Qwen-Image-2512")
+    edit_gguf: str = str(_MODELS_DIR / "Qwen-Image-Edit-2511-GGUF" / "qwen-image-edit-2511-Q8_0.gguf")
+    edit_base_model_dir: str = str(_MODELS_DIR / "Qwen-Image-Edit-2511")
+    llama_cpp_cli: str = "llama-mtmd-cli"
 
 
 @dataclass
@@ -75,8 +79,29 @@ class GenerationSettings:
 
 
 @dataclass
+class EditSettings:
+    prompt: str = ""
+    negative_prompt: str = DEFAULT_NEGATIVE_PROMPT
+    aspect_ratio: str = "1:1 (1328x1328)"
+    num_inference_steps: int = 40
+    true_cfg_scale: float = 4.0
+    guidance_scale: float = 1.0
+    seed: int = -1
+    output_dir: str = str(Path.home() / "Pictures" / "qwenimg2512")
+    ref_image_1: str = ""
+    ref_image_2: str = ""
+    ref_image_3: str = ""
+    lora_path: str = ""
+    lora_scale_start: float = 1.0
+    lora_scale_end: float = 1.0
+    lora_step_start: int = 0
+    lora_step_end: int = -1
+
+
+@dataclass
 class Config:
     generation: GenerationSettings = field(default_factory=GenerationSettings)
+    edit: EditSettings = field(default_factory=EditSettings)
     model_paths: ModelPaths = field(default_factory=ModelPaths)
 
     def save(self) -> None:
@@ -90,12 +115,20 @@ class Config:
             return cls()
         try:
             data = json.loads(CONFIG_FILE.read_text())
-            gen = data.get("generation", {})
-            paths = data.get("model_paths", {})
+            gen = _filter_kwargs(GenerationSettings, data.get("generation", {}))
+            edit = _filter_kwargs(EditSettings, data.get("edit", {}))
+            paths = _filter_kwargs(ModelPaths, data.get("model_paths", {}))
             return cls(
                 generation=GenerationSettings(**gen),
+                edit=EditSettings(**edit),
                 model_paths=ModelPaths(**paths),
             )
         except Exception:
             logger.exception("Failed to load config, using defaults")
             return cls()
+
+
+def _filter_kwargs(cls: type, kwargs_dict: dict) -> dict:
+    """Filter a dict to only keys that are valid fields of *cls*."""
+    valid = {f.name for f in dataclasses.fields(cls)}
+    return {k: v for k, v in kwargs_dict.items() if k in valid}

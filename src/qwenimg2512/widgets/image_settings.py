@@ -28,10 +28,11 @@ class ImageSettingsWidget(QGroupBox):
 
         # Model variant
         model_row = QHBoxLayout()
-        model_row.addWidget(QLabel("Model:"))
+        self.model_label = QLabel("Model:")
+        model_row.addWidget(self.model_label)
         self.model_combo = QComboBox()
         self.model_combo.addItems(MODEL_VARIANTS.keys())
-        self.model_combo.currentTextChanged.connect(lambda: self.settings_changed.emit())
+        self.model_combo.currentTextChanged.connect(lambda _: self.settings_changed.emit())
         model_row.addWidget(self.model_combo, 1)
         layout.addLayout(model_row)
 
@@ -40,7 +41,7 @@ class ImageSettingsWidget(QGroupBox):
         ratio_row.addWidget(QLabel("Aspect Ratio:"))
         self.ratio_combo = QComboBox()
         self.ratio_combo.addItems(ASPECT_RATIOS.keys())
-        self.ratio_combo.currentTextChanged.connect(lambda: self.settings_changed.emit())
+        self.ratio_combo.currentTextChanged.connect(lambda _: self.settings_changed.emit())
         ratio_row.addWidget(self.ratio_combo, 1)
         layout.addLayout(ratio_row)
 
@@ -52,7 +53,7 @@ class ImageSettingsWidget(QGroupBox):
         self.steps_spin.setValue(50)
         self.steps_spin.setSingleStep(5)
         self.steps_spin.setToolTip("Number of denoising steps (50 recommended)")
-        self.steps_spin.valueChanged.connect(lambda: self.settings_changed.emit())
+        self.steps_spin.valueChanged.connect(lambda _: self.settings_changed.emit())
         steps_row.addWidget(self.steps_spin, 1)
         layout.addLayout(steps_row)
 
@@ -65,7 +66,7 @@ class ImageSettingsWidget(QGroupBox):
         self.cfg_spin.setSingleStep(0.5)
         self.cfg_spin.setDecimals(1)
         self.cfg_spin.setToolTip("Classifier-free guidance scale (4.0 recommended)")
-        self.cfg_spin.valueChanged.connect(lambda: self.settings_changed.emit())
+        self.cfg_spin.valueChanged.connect(lambda _: self.settings_changed.emit())
         cfg_row.addWidget(self.cfg_spin, 1)
         layout.addLayout(cfg_row)
 
@@ -78,7 +79,7 @@ class ImageSettingsWidget(QGroupBox):
         self.guidance_spin.setSingleStep(0.1)
         self.guidance_spin.setDecimals(1)
         self.guidance_spin.setToolTip("Guidance scale (1.0 recommended, usually kept fixed)")
-        self.guidance_spin.valueChanged.connect(lambda: self.settings_changed.emit())
+        self.guidance_spin.valueChanged.connect(lambda _: self.settings_changed.emit())
         guidance_row.addWidget(self.guidance_spin, 1)
         layout.addLayout(guidance_row)
 
@@ -87,7 +88,7 @@ class ImageSettingsWidget(QGroupBox):
         self.resolution_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.resolution_label.setProperty("class", "muted")
         self._update_resolution_label()
-        self.ratio_combo.currentTextChanged.connect(lambda: self._update_resolution_label())
+        self.ratio_combo.currentTextChanged.connect(lambda _: self._update_resolution_label())
         layout.addWidget(self.resolution_label)
 
     def _update_resolution_label(self) -> None:

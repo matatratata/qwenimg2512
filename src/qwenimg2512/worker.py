@@ -406,8 +406,8 @@ class GenerationWorker(QThread):
         num_gpus = torch.cuda.device_count()
         if num_gpus >= 2:
             free = [torch.cuda.mem_get_info(i)[0] for i in range(num_gpus)]
-            best_gpu = free.index(max(free))
-            cn_gpu = 1 - best_gpu  # Other GPU
+            sorted_gpus = sorted(range(num_gpus), key=lambda i: free[i], reverse=True)
+            cn_gpu = sorted_gpus[1] if num_gpus > 1 else sorted_gpus[0]
         else:
             cn_gpu = 0
 
@@ -514,10 +514,13 @@ class GenerationWorker(QThread):
                 self._cn_hooks = None
                 self._cn_state = None
 
+            import gc
+
             import torch
 
             del self._pipe
             self._pipe = None
+            gc.collect()
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
         except Exception:

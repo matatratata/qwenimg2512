@@ -35,7 +35,7 @@ def main() -> None:
     setup_thread_safe_logging()
 
     app = QApplication(sys.argv)
-    app.setApplicationName("Qwen-Image-2512")
+    app.setApplicationName("QwenImage")
     app.setOrganizationName("qwenimg2512")
 
     apply_dark_theme(app)

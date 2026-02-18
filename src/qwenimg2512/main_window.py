@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -14,6 +15,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QScrollArea,
     QSplitter,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -33,6 +35,7 @@ from qwenimg2512.worker import (
     load_image_with_alpha_fill, 
     resize_and_center_crop
 )
+from qwenimg2512.edit_worker import EditWorker
 
 logger = logging.getLogger(__name__)
 
@@ -60,10 +63,13 @@ class MainWindow(QMainWindow):
         main_layout = QHBoxLayout(central)
         main_layout.setContentsMargins(8, 8, 8, 8)
 
-        # Left panel: settings
-        left_panel = QWidget()
-        left_layout = QVBoxLayout(left_panel)
-        left_layout.setContentsMargins(0, 0, 0, 0)
+        # Left panel: Tabs
+        self.tabs = QTabWidget()
+        
+        # --- Tab 1: Generate (2512) ---
+        generate_tab = QWidget()
+        gen_layout = QVBoxLayout(generate_tab)
+        gen_layout.setContentsMargins(0, 0, 0, 0)
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -100,16 +106,25 @@ class MainWindow(QMainWindow):
 
         scroll_layout.addStretch()
         scroll.setWidget(scroll_content)
-        left_layout.addWidget(scroll)
+        gen_layout.addWidget(scroll)
+
+        self.tabs.addTab(generate_tab, "Generate (2512)")
+
+        # --- Tab 2: Edit (2511) ---
+        from qwenimg2512.widgets.edit_tab import EditTabWidget
+        self.edit_tab = EditTabWidget()
+        self.edit_tab.generate_requested.connect(self._start_edit_generation)
+        self.edit_tab.cancel_requested.connect(self._cancel_edit_generation)
+        self.tabs.addTab(self.edit_tab, "Edit (2511)")
 
         # Right panel: preview
         self.preview_widget = ImagePreviewWidget()
 
         # Splitter
         splitter = QSplitter(Qt.Orientation.Horizontal)
-        splitter.addWidget(left_panel)
+        splitter.addWidget(self.tabs)
         splitter.addWidget(self.preview_widget)
-        splitter.setSizes([400, 600])
+        splitter.setSizes([450, 600])
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
 
@@ -129,7 +144,10 @@ class MainWindow(QMainWindow):
         file_menu.addSeparator()
         file_menu.addAction("E&xit", self.close)
 
+
+
     def _load_settings(self) -> None:
+        # Generate settings
         gs = self._config.generation
         self.prompt_widget.set_prompt(gs.prompt)
         self.prompt_widget.set_negative_prompt(gs.negative_prompt)
@@ -168,6 +186,28 @@ class MainWindow(QMainWindow):
         self.controlnet_widget.set_guidance_start(gs.control_guidance_start)
         self.controlnet_widget.set_guidance_end(gs.control_guidance_end)
 
+        # Edit settings
+        es = self._config.edit
+        self.edit_tab.prompt_widget.set_prompt(es.prompt)
+        self.edit_tab.prompt_widget.set_negative_prompt(es.negative_prompt)
+        self.edit_tab.gen_controls.seed_spin.setValue(es.seed)
+        self.edit_tab.gen_controls.output_edit.setText(es.output_dir)
+        self.edit_tab.settings_widget.steps_spin.setValue(es.num_inference_steps)
+        self.edit_tab.settings_widget.cfg_spin.setValue(es.true_cfg_scale)
+        self.edit_tab.settings_widget.guidance_spin.setValue(es.guidance_scale)
+        
+        idx = self.edit_tab.settings_widget.ratio_combo.findText(es.aspect_ratio)
+        if idx >= 0:
+            self.edit_tab.settings_widget.ratio_combo.setCurrentIndex(idx)
+
+        self.edit_tab.set_reference_images([es.ref_image_1, es.ref_image_2, es.ref_image_3])
+
+        self.edit_tab.lora_widget.set_lora_path(es.lora_path)
+        self.edit_tab.lora_widget.set_scale_start(es.lora_scale_start)
+        self.edit_tab.lora_widget.set_scale_end(es.lora_scale_end)
+        self.edit_tab.lora_widget.set_step_start(es.lora_step_start)
+        self.edit_tab.lora_widget.set_step_end(es.lora_step_end)
+
     def _collect_settings(self) -> None:
         gs = self._config.generation
         gs.prompt = self.prompt_widget.get_prompt()
@@ -194,6 +234,28 @@ class MainWindow(QMainWindow):
         gs.control_guidance_start = self.controlnet_widget.get_guidance_start()
         gs.control_guidance_end = self.controlnet_widget.get_guidance_end()
 
+        # Edit settings
+        es = self._config.edit
+        es.prompt = self.edit_tab.prompt_widget.get_prompt()
+        es.negative_prompt = self.edit_tab.prompt_widget.get_negative_prompt()
+        es.aspect_ratio = self.edit_tab.settings_widget.get_aspect_ratio()
+        es.num_inference_steps = self.edit_tab.settings_widget.get_steps()
+        es.true_cfg_scale = self.edit_tab.settings_widget.get_cfg_scale()
+        es.guidance_scale = self.edit_tab.settings_widget.get_guidance_scale()
+        es.seed = self.edit_tab.gen_controls.get_seed()
+        es.output_dir = self.edit_tab.gen_controls.get_output_dir()
+        
+        refs = self.edit_tab.get_reference_images()
+        es.ref_image_1 = refs[0] if len(refs) > 0 else ""
+        es.ref_image_2 = refs[1] if len(refs) > 1 else ""
+        es.ref_image_3 = refs[2] if len(refs) > 2 else ""
+
+        es.lora_path = self.edit_tab.lora_widget.get_lora_path()
+        es.lora_scale_start = self.edit_tab.lora_widget.get_scale_start()
+        es.lora_scale_end = self.edit_tab.lora_widget.get_scale_end()
+        es.lora_step_start = self.edit_tab.lora_widget.get_step_start()
+        es.lora_step_end = self.edit_tab.lora_widget.get_step_end()
+
     def _save_settings(self) -> None:
         self._collect_settings()
         self._config.save()
@@ -203,6 +265,59 @@ class MainWindow(QMainWindow):
         gen_running = self._worker and self._worker.isRunning()
         cap_running = self._captioning_worker and self._captioning_worker.isRunning()
         return bool(gen_running or cap_running)
+
+    def _start_edit_generation(self) -> None:
+        prompt = self.edit_tab.prompt_widget.get_prompt()
+        if not prompt:
+            QMessageBox.warning(self, "Missing Prompt", "Please enter a prompt before generating.")
+            return
+
+        if self._is_busy():
+            QMessageBox.warning(self, "Busy", "Please wait for the current operation to finish.")
+            return
+
+        self._collect_settings()
+        self._config.save()
+
+        self.edit_tab.set_generating(True)
+        self.statusBar().showMessage("Generating (Edit)...")
+
+        self._worker = EditWorker(self._config.edit, self._config.model_paths)
+        self._worker.progress_updated.connect(self._on_edit_progress)
+        self._worker.stage_changed.connect(self._on_edit_stage)
+        self._worker.finished_success.connect(self._on_edit_finished)
+        self._worker.error_occurred.connect(self._on_edit_error)
+        self._worker.vram_updated.connect(self._on_edit_vram)
+        self._worker.start()
+
+    def _cancel_edit_generation(self) -> None:
+        if self._worker and self._worker.isRunning():
+            self._worker.cancel()
+            self.edit_tab.set_generating(False)
+            self.edit_tab.set_stage("Cancelled")
+            self.statusBar().showMessage("Generation cancelled")
+
+    def _on_edit_progress(self, current: int, total: int, message: str) -> None:
+        self.edit_tab.set_progress(current, total, message)
+
+    def _on_edit_stage(self, stage: str) -> None:
+        self.edit_tab.set_stage(stage)
+        self.statusBar().showMessage(stage)
+
+    def _on_edit_finished(self, output_path: str) -> None:
+        self.edit_tab.set_generating(False)
+        self.edit_tab.set_finished(output_path)
+        self.preview_widget.set_image(output_path)
+        self.statusBar().showMessage(f"Image saved: {output_path}")
+
+    def _on_edit_error(self, error: str) -> None:
+        self.edit_tab.set_generating(False)
+        self.edit_tab.set_error(error)
+        self.statusBar().showMessage(f"Error: {error}")
+        QMessageBox.critical(self, "Generation Error", error)
+
+    def _on_edit_vram(self, gb: float) -> None:
+        self.edit_tab.set_vram(gb)
 
     def _start_generation(self) -> None:
         prompt = self.prompt_widget.get_prompt()
@@ -216,6 +331,7 @@ class MainWindow(QMainWindow):
 
         self._collect_settings()
         self._config.save()
+
 
         self.gen_controls.set_generating(True)
         self.statusBar().showMessage("Generating...")
@@ -276,7 +392,7 @@ class MainWindow(QMainWindow):
     # --- Fit preview ---
 
     def _connect_fit_preview(self) -> None:
-        self.settings_widget.ratio_combo.currentTextChanged.connect(lambda: self._update_fit_preview())
+        self.settings_widget.ratio_combo.currentTextChanged.connect(lambda _: self._update_fit_preview())
         self.image_input.image_loaded.connect(lambda _: self._update_fit_preview())
         self.image_input.image_cleared.connect(self._update_fit_preview)
         self.controlnet_widget.settings_changed.connect(self._update_fit_preview)
@@ -325,6 +441,7 @@ class MainWindow(QMainWindow):
         self._captioning_worker.caption_ready.connect(self._on_caption_ready)
         self._captioning_worker.stage_changed.connect(self._on_caption_stage)
         self._captioning_worker.error_occurred.connect(self._on_caption_error)
+        self._captioning_worker.finished.connect(self._captioning_worker.deleteLater)
         self._captioning_worker.start()
 
     def _start_controlnet_captioning(self, image_path: str, control_type: str) -> None:
@@ -352,6 +469,7 @@ class MainWindow(QMainWindow):
         self._captioning_worker.caption_ready.connect(self._on_caption_ready)
         self._captioning_worker.stage_changed.connect(self._on_caption_stage)
         self._captioning_worker.error_occurred.connect(self._on_caption_error)
+        self._captioning_worker.finished.connect(self._captioning_worker.deleteLater)
         self._captioning_worker.start()
 
     def _on_caption_ready(self, caption: str) -> None:
@@ -368,7 +486,7 @@ class MainWindow(QMainWindow):
             self.prompt_widget.set_prompt(caption)
             self.statusBar().showMessage("Caption generated")
 
-        self._captioning_worker = None
+
 
     def _on_caption_stage(self, stage: str) -> None:
         self.statusBar().showMessage(stage)
@@ -381,7 +499,7 @@ class MainWindow(QMainWindow):
 
         self.statusBar().showMessage(f"Caption error: {error}")
         QMessageBox.critical(self, "Captioning Error", error)
-        self._captioning_worker = None
+
 
     # --- Model paths ---
 
@@ -395,18 +513,21 @@ class MainWindow(QMainWindow):
     def _open_output_folder(self) -> None:
         output_dir = Path(self.gen_controls.get_output_dir())
         output_dir.mkdir(parents=True, exist_ok=True)
-        if sys.platform == "linux":
+        if sys.platform == "win32":
+            os.startfile(str(output_dir))  # noqa: S606
+        elif sys.platform == "linux":
             subprocess.Popen(["xdg-open", str(output_dir)])  # noqa: S603, S607
         elif sys.platform == "darwin":
             subprocess.Popen(["open", str(output_dir)])  # noqa: S603, S607
         else:
-            subprocess.Popen(["explorer", str(output_dir)])  # noqa: S603, S607
+            subprocess.Popen(["xdg-open", str(output_dir)])  # noqa: S603, S607
 
     def closeEvent(self, event: object) -> None:
         if self._worker and self._worker.isRunning():
             self._worker.cancel()
             self._worker.wait(5000)
         if self._captioning_worker and self._captioning_worker.isRunning():
+            self._captioning_worker.cancel()
             self._captioning_worker.wait(5000)
         self._collect_settings()
         self._config.save()
