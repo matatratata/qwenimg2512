@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
+import shutil
 import subprocess
+from pathlib import Path
 
 from PySide6.QtCore import QThread, Signal
 
@@ -45,8 +48,23 @@ class CaptioningWorker(QThread):
 
             prompt_to_use = self._custom_prompt or CAPTION_PROMPT
 
+            cli_path = self._model_paths.llama_cpp_cli
+            # If not an absolute path, try to resolve it
+            if not os.path.isabs(cli_path):
+                resolved = shutil.which(cli_path)
+                if not resolved:
+                    # Fallback to common location
+                    fallback = Path.home() / "AI/llama.cpp/build/bin" / cli_path
+                    if fallback.is_file():
+                        resolved = str(fallback)
+                
+                if resolved:
+                    cli_path = resolved
+                # If still not found, subprocess will likely fail with FileNotFoundError,
+                # which is caught below.
+
             cmd = [
-                self._model_paths.llama_cpp_cli,
+                cli_path,
                 "-m", self._model_paths.vl_model,
                 "--mmproj", self._model_paths.mmproj,
                 "--image", self._image_path,
@@ -57,7 +75,7 @@ class CaptioningWorker(QThread):
                 "-c", "4096",
             ]
 
-            logger.info("Running llama-mtmd-cli for captioning")
+            logger.info("Running llama-mtmd-cli for captioning: %s", cli_path)
 
             self._process = subprocess.Popen(
                 cmd,

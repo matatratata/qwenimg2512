@@ -48,12 +48,22 @@ class ModelPaths:
     base_model_dir: str = str(_MODELS_DIR / "Qwen-Image-2512")
     edit_gguf: str = str(_MODELS_DIR / "Qwen-Image-Edit-2511-GGUF" / "qwen-image-edit-2511-Q8_0.gguf")
     edit_base_model_dir: str = str(_MODELS_DIR / "Qwen-Image-Edit-2511")
-    llama_cpp_cli: str = "llama-mtmd-cli"
+    edit_2509_gguf: str = str(_MODELS_DIR / "Qwen-Image-Edit-2509-GGUF" / "qwen-image-edit-2509-Q8_0.gguf")
+    edit_2509_base_model_dir: str = str(_MODELS_DIR / "Qwen-Image-Edit-2509")
+    edit_2509_telestyle_fused_dir: str = str(_MODELS_DIR / "Qwen-Image-Edit-2509-TeleStyle-Fused")
+    telestyle_lora: str = str(_MODELS_DIR / "TeleStyle" / "diffsynth_Qwen-Image-Edit-2509-telestyle.safetensors")
+    telestyle_speedup: str = str(_MODELS_DIR / "TeleStyle" / "diffsynth_Qwen-Image-Edit-2509-Lightning-4steps-V1.0-bf16.safetensors")
+    llama_cpp_cli: str = str(Path.home() / "AI/llama.cpp/build/bin/llama-mtmd-cli")
+    seedvr2_gguf: str = str(_MODELS_DIR / "SeedVR2" / "seedvr2_ema_7b-Q8_0.gguf")
+    seedvr2_vae: str = str(_MODELS_DIR / "SeedVR2" / "ema_vae.pth")
+    seedvr2_model_dir: str = str(_MODELS_DIR / "SeedVR2")
+    seedvr2_cli: str = str(Path.home() / "AI" / "ComfyUI-SeedVR2_VideoUpscaler" / "inference_cli.py")
 
 
 @dataclass
 class GenerationSettings:
     prompt: str = ""
+    sampler_name: str = "euler"
     negative_prompt: str = DEFAULT_NEGATIVE_PROMPT
     aspect_ratio: str = "1:1 (1328x1328)"
     num_inference_steps: int = 50
@@ -81,6 +91,7 @@ class GenerationSettings:
 @dataclass
 class EditSettings:
     prompt: str = ""
+    sampler_name: str = "euler"
     negative_prompt: str = DEFAULT_NEGATIVE_PROMPT
     aspect_ratio: str = "1:1 (1328x1328)"
     num_inference_steps: int = 40
@@ -91,6 +102,9 @@ class EditSettings:
     ref_image_1: str = ""
     ref_image_2: str = ""
     ref_image_3: str = ""
+    ref_fit_mode_1: str = "cover"
+    ref_fit_mode_2: str = "cover"
+    ref_fit_mode_3: str = "cover"
     lora_path: str = ""
     lora_scale_start: float = 1.0
     lora_scale_end: float = 1.0
@@ -99,9 +113,55 @@ class EditSettings:
 
 
 @dataclass
+class Edit2509Settings:
+    use_telestyle: bool = False
+    prompt: str = ""
+    sampler_name: str = "euler"
+    negative_prompt: str = DEFAULT_NEGATIVE_PROMPT
+    aspect_ratio: str = "1:1 (1328x1328)"
+    num_inference_steps: int = 40
+    true_cfg_scale: float = 4.0
+    guidance_scale: float = 1.0
+    seed: int = -1
+    output_dir: str = str(Path.home() / "Pictures" / "qwenimg2512")
+    ref_image_1: str = ""
+    ref_image_2: str = ""
+    ref_image_3: str = ""
+    ref_fit_mode_1: str = "cover"
+    ref_fit_mode_2: str = "cover"
+    ref_fit_mode_3: str = "cover"
+    lora_path: str = ""
+    lora_scale_start: float = 1.0
+    lora_scale_end: float = 1.0
+    lora_step_start: int = 0
+    lora_step_end: int = -1
+    lora_path_2: str = ""
+    lora_scale_start_2: float = 1.0
+    lora_scale_end_2: float = 1.0
+    lora_step_start_2: int = 0
+    lora_step_end_2: int = -1
+
+
+@dataclass
+class SeedVR2Settings:
+    input_image: str = ""
+    sampler_name: str = "euler"
+    depth_map_path: str = ""
+    output_dir: str = str(Path.home() / "Pictures" / "qwenimg2512")
+    resolution: int = 1080
+    seed: int = 42
+    input_noise_scale: float = 0.0
+    latent_noise_scale: float = 0.0
+    color_correction: str = "lab"
+    vae_tiling: bool = True
+    blocks_to_swap: int = 0
+
+@dataclass
 class Config:
     generation: GenerationSettings = field(default_factory=GenerationSettings)
     edit: EditSettings = field(default_factory=EditSettings)
+    edit_2509: Edit2509Settings = field(default_factory=Edit2509Settings)
+    seedvr2: SeedVR2Settings = field(default_factory=SeedVR2Settings)
     model_paths: ModelPaths = field(default_factory=ModelPaths)
 
     def save(self) -> None:
@@ -117,10 +177,14 @@ class Config:
             data = json.loads(CONFIG_FILE.read_text())
             gen = _filter_kwargs(GenerationSettings, data.get("generation", {}))
             edit = _filter_kwargs(EditSettings, data.get("edit", {}))
+            edit_2509 = _filter_kwargs(Edit2509Settings, data.get("edit_2509", {}))
+            seedvr2 = _filter_kwargs(SeedVR2Settings, data.get("seedvr2", {}))
             paths = _filter_kwargs(ModelPaths, data.get("model_paths", {}))
             return cls(
                 generation=GenerationSettings(**gen),
                 edit=EditSettings(**edit),
+                edit_2509=Edit2509Settings(**edit_2509),
+                seedvr2=SeedVR2Settings(**seedvr2),
                 model_paths=ModelPaths(**paths),
             )
         except Exception:

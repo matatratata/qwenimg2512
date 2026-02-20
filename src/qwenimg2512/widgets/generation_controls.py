@@ -146,3 +146,6 @@ class GenerationControlsWidget(QGroupBox):
 
     def get_output_dir(self) -> str:
         return self.output_edit.text()
+
+    def set_output_dir(self, output_dir: str) -> None:
+        self.output_edit.setText(output_dir)

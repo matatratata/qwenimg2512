@@ -6,6 +6,7 @@ BASE_DIR="$HOME/AI/Models"
 
 # Enable HF Transfer for faster downloads (requires huggingface_hub[hf_transfer])
 export HF_HUB_ENABLE_HF_TRANSFER=1
+export HF_HUB_DISABLE_XET=1
 
 echo "Downloading Qwen Image models to $BASE_DIR..."
 echo "Note: Fast downloads enabled (HF_HUB_ENABLE_HF_TRANSFER=1)."
@@ -65,7 +66,7 @@ download_file \
 download_repo \
     "Qwen/Qwen-Image-Edit-2511" \
     "$BASE_DIR/Qwen-Image-Edit-2511" \
-    "scheduler/*" "tokenizer/*" "text_encoder/*" "vae/*" "model_index.json"
+    "scheduler/*" "tokenizer/*" "text_encoder/*" "vae/*" "model_index.json" "processor/*" "transformer/config.json"
 
 # 5. VL Model for Captioning
 download_file \
@@ -73,10 +74,10 @@ download_file \
     "Qwen2.5-VL-7B-Instruct-UD-Q8_K_XL.gguf" \
     "$BASE_DIR/Qwen2.5-VL-7B-Instruct-GGUF"
 
-download_file \
-    "Qwen/Qwen2.5-VL-7B-Instruct-GGUF" \
-    "mmproj-model-f16.gguf" \
-    "$BASE_DIR/Qwen2.5-VL-7B-Instruct-GGUF"
+# download_file \
+#     "Qwen/Qwen2.5-VL-7B-Instruct-GGUF" \
+#     "mmproj-model-f16.gguf" \
+#     "$BASE_DIR/Qwen2.5-VL-7B-Instruct-GGUF"
 
 # Symlink mmproj for config compatibility if needed (config expects mmproj-BF16.gguf)
 if [ -f "$BASE_DIR/Qwen2.5-VL-7B-Instruct-GGUF/mmproj-model-f16.gguf" ]; then
@@ -96,12 +97,57 @@ mv "$BASE_DIR/Qwen2.5-VL-7B-Instruct-GGUF/vae_temp/vae/diffusion_pytorch_model.s
 rm -rf "$BASE_DIR/Qwen2.5-VL-7B-Instruct-GGUF/vae_temp"
 
 # 6. ControlNet Union
-download_file \
-    "Qwen/Qwen-Image-2512-Fun-Controlnet-Union" \
-    "diffusion_pytorch_model.safetensors" \
-    "$BASE_DIR/Qwen-Image-2512-Fun-Controlnet-Union"
+# download_file \
+#     "Qwen/Qwen-Image-2512-Fun-Controlnet-Union" \
+#     "diffusion_pytorch_model.safetensors" \
+#     "$BASE_DIR/Qwen-Image-2512-Fun-Controlnet-Union"
 
 # Rename
-mv "$BASE_DIR/Qwen-Image-2512-Fun-Controlnet-Union/diffusion_pytorch_model.safetensors" "$BASE_DIR/Qwen-Image-2512-Fun-Controlnet-Union/Qwen-Image-2512-Fun-Controlnet-Union-2602.safetensors"
+# mv "$BASE_DIR/Qwen-Image-2512-Fun-Controlnet-Union/diffusion_pytorch_model.safetensors" "$BASE_DIR/Qwen-Image-2512-Fun-Controlnet-Union/Qwen-Image-2512-Fun-Controlnet-Union-2602.safetensors"
+
+# 7. Qwen-Image-Edit-2509 GGUF (kept for reference, no longer primary)
+# download_file \
+#     "unsloth/Qwen-Image-Edit-2509-GGUF" \
+#     "qwen-image-edit-2509-Q8_0.gguf" \
+#     "$BASE_DIR/Qwen-Image-Edit-2509-GGUF"
+
+# 8. Qwen-Image-Edit-2509 Base + full transformer safetensors (for BnB 8-bit)
+download_repo \
+    "Qwen/Qwen-Image-Edit-2509" \
+    "$BASE_DIR/Qwen-Image-Edit-2509" \
+    "scheduler/*" "tokenizer/*" "text_encoder/*" "vae/*" "model_index.json" "transformer/*" "processor/*"
+
+# 9. TeleStyle LoRA & Speedup
+download_file \
+    "Tele-AI/TeleStyle" \
+    "weights/diffsynth_Qwen-Image-Edit-2509-telestyle.safetensors" \
+    "$BASE_DIR/TeleStyle"
+
+download_file \
+    "Tele-AI/TeleStyle" \
+    "weights/diffsynth_Qwen-Image-Edit-2509-Lightning-4steps-V1.0-bf16.safetensors" \
+    "$BASE_DIR/TeleStyle"
+
+# 10. SeedVR2 GGUF
+mkdir -p "$BASE_DIR/SeedVR2"
+download_file \
+    "cmeka/SeedVR2-GGUF" \
+    "seedvr2_ema_7b-Q8_0.gguf" \
+    "$BASE_DIR/SeedVR2"
+
+# 11. SeedVR2 VAE
+download_file \
+    "ByteDance-Seed/SeedVR2-7B" \
+    "ema_vae.pth" \
+    "$BASE_DIR/SeedVR2"
+
+# 12. SeedVR2 Inference CLI (clone repo if not present)
+SEEDVR2_CLI_DIR="$HOME/AI/ComfyUI-SeedVR2_VideoUpscaler"
+if [ ! -d "$SEEDVR2_CLI_DIR" ]; then
+    echo "Cloning ComfyUI-SeedVR2_VideoUpscaler..."
+    git clone https://github.com/numz/ComfyUI-SeedVR2_VideoUpscaler.git "$SEEDVR2_CLI_DIR"
+else
+    echo "SeedVR2 CLI already present at $SEEDVR2_CLI_DIR"
+fi
 
 echo "All downloads complete!"

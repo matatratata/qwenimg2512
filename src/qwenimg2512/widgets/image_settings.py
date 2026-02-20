@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
 )
 
 from qwenimg2512.config import ASPECT_RATIOS, MODEL_VARIANTS
+from qwenimg2512.samplers import SAMPLER_NAMES, SAMPLER_DESCRIPTIONS
 
 
 class ImageSettingsWidget(QGroupBox):
@@ -45,17 +46,39 @@ class ImageSettingsWidget(QGroupBox):
         ratio_row.addWidget(self.ratio_combo, 1)
         layout.addLayout(ratio_row)
 
+        # Sampler
+        sampler_row = QHBoxLayout()
+        sampler_row.addWidget(QLabel("Sampler:"))
+        self.sampler_combo = QComboBox()
+        for name in SAMPLER_NAMES:
+            self.sampler_combo.addItem(name)
+            
+        for i, name in enumerate(SAMPLER_NAMES):
+            self.sampler_combo.setItemData(i, SAMPLER_DESCRIPTIONS.get(name, ""), Qt.ItemDataRole.ToolTipRole)
+            
+        self.sampler_combo.setToolTip("Select the generation sampler")
+        self.sampler_combo.currentTextChanged.connect(lambda _: self.settings_changed.emit())
+        sampler_row.addWidget(self.sampler_combo, 1)
+        layout.addLayout(sampler_row)
+
         # Inference steps
         steps_row = QHBoxLayout()
         steps_row.addWidget(QLabel("Steps:"))
         self.steps_spin = QSpinBox()
-        self.steps_spin.setRange(10, 100)
+        self.steps_spin.setRange(1, 100)
         self.steps_spin.setValue(50)
         self.steps_spin.setSingleStep(5)
         self.steps_spin.setToolTip("Number of denoising steps (50 recommended)")
         self.steps_spin.valueChanged.connect(lambda _: self.settings_changed.emit())
         steps_row.addWidget(self.steps_spin, 1)
         layout.addLayout(steps_row)
+
+        # Effective steps indicator (visible only during img2img)
+        self.effective_steps_label = QLabel()
+        self.effective_steps_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.effective_steps_label.setStyleSheet("color: #e0a040; font-size: 11px;")
+        self.effective_steps_label.setVisible(False)
+        layout.addWidget(self.effective_steps_label)
 
         # True CFG scale
         cfg_row = QHBoxLayout()
@@ -102,6 +125,9 @@ class ImageSettingsWidget(QGroupBox):
     def get_steps(self) -> int:
         return self.steps_spin.value()
 
+    def get_sampler_name(self) -> str:
+        return self.sampler_combo.currentText()
+
     def get_cfg_scale(self) -> float:
         return self.cfg_spin.value()
 
@@ -113,3 +139,13 @@ class ImageSettingsWidget(QGroupBox):
 
     def get_aspect_ratio(self) -> str:
         return self.ratio_combo.currentText()
+
+    def update_effective_steps(self, has_image: bool, strength: float) -> None:
+        """Update the effective steps indicator for img2img mode."""
+        steps = self.steps_spin.value()
+        if not has_image or strength >= 1.0:
+            self.effective_steps_label.setVisible(False)
+            return
+        effective = max(1, int(steps * strength))
+        self.effective_steps_label.setText(f"⚠ Effective: {effective} steps (strength {strength:.2f})")
+        self.effective_steps_label.setVisible(True)

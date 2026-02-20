@@ -41,6 +41,12 @@ class ModelPathsDialog(QDialog):
             "controlnet_path": "ControlNet Union:",
             "edit_gguf": "Edit 2511 GGUF:",
             "llama_cpp_cli": "llama-mtmd-cli Path:",
+            "edit_2509_gguf": "Edit 2509 GGUF:",
+            "telestyle_lora": "TeleStyle LoRA:",
+            "telestyle_speedup": "TeleStyle Speedup LoRA:",
+            "seedvr2_gguf": "SeedVR2 GGUF:",
+            "seedvr2_vae": "SeedVR2 VAE:",
+            "seedvr2_cli": "SeedVR2 CLI (inference_cli.py):",
         }
 
         filters = {
@@ -51,6 +57,12 @@ class ModelPathsDialog(QDialog):
             "controlnet_path": "SafeTensors Files (*.safetensors)",
             "edit_gguf": "GGUF Files (*.gguf)",
             "llama_cpp_cli": "All Files (*)",
+            "edit_2509_gguf": "GGUF Files (*.gguf)",
+            "telestyle_lora": "SafeTensors Files (*.safetensors)",
+            "telestyle_speedup": "SafeTensors Files (*.safetensors)",
+            "seedvr2_gguf": "GGUF Files (*.gguf)",
+            "seedvr2_vae": "PyTorch Files (*.pth)",
+            "seedvr2_cli": "Python Files (*.py)",
         }
 
         for field_name, label_text in labels.items():
@@ -134,6 +146,89 @@ class ModelPathsDialog(QDialog):
         status_edit.setObjectName("status_edit_base_model_dir")
         layout.addWidget(status_edit)
         self._validate_dir("edit_base_model_dir", self._model_paths.edit_base_model_dir)
+
+        # Edit-2509 Base model directory
+        layout.addWidget(QLabel(""))
+        hint_edit_2509 = QLabel("Edit-2509 Base model directory (optional):")
+        hint_edit_2509.setToolTip(
+            "Local directory containing the Qwen-Image-Edit-2509 model components. "
+            "Used for the Edit (2509) tab."
+        )
+        layout.addWidget(hint_edit_2509)
+        row_edit_2509 = QHBoxLayout()
+        edit_dir_2509 = QLineEdit()
+        edit_dir_2509.setText(getattr(self._model_paths, "edit_2509_base_model_dir"))
+        edit_dir_2509.setPlaceholderText("Leave empty to download from HuggingFace")
+        edit_dir_2509.textChanged.connect(lambda text: self._validate_dir("edit_2509_base_model_dir", text))
+        row_edit_2509.addWidget(edit_dir_2509, 1)
+        self._fields["edit_2509_base_model_dir"] = edit_dir_2509
+
+        browse_btn_edit_2509 = QPushButton("...")
+        browse_btn_edit_2509.setMaximumWidth(40)
+        browse_btn_edit_2509.clicked.connect(lambda checked=False, e=edit_dir_2509: self._browse_dir(e))
+        row_edit_2509.addWidget(browse_btn_edit_2509)
+        layout.addLayout(row_edit_2509)
+
+        status_edit_2509 = QLabel()
+        status_edit_2509.setProperty("class", "muted")
+        status_edit_2509.setObjectName("status_edit_2509_base_model_dir")
+        layout.addWidget(status_edit_2509)
+        self._validate_dir("edit_2509_base_model_dir", getattr(self._model_paths, "edit_2509_base_model_dir"))
+
+        # Edit-2509 TeleStyle Fused model directory
+        layout.addWidget(QLabel(""))
+        hint_fused = QLabel("Edit-2509 TeleStyle Fused model directory:")
+        hint_fused.setToolTip(
+            "Directory containing the fused TeleStyle+Lightning model. "
+            "Created by running fuse_telestyle.py once."
+        )
+        layout.addWidget(hint_fused)
+        row_fused = QHBoxLayout()
+        edit_dir_fused = QLineEdit()
+        edit_dir_fused.setText(getattr(self._model_paths, "edit_2509_telestyle_fused_dir", ""))
+        edit_dir_fused.setPlaceholderText("Path to fused model (run fuse_telestyle.py first)")
+        edit_dir_fused.textChanged.connect(lambda text: self._validate_dir("edit_2509_telestyle_fused_dir", text))
+        row_fused.addWidget(edit_dir_fused, 1)
+        self._fields["edit_2509_telestyle_fused_dir"] = edit_dir_fused
+
+        browse_btn_fused = QPushButton("...")
+        browse_btn_fused.setMaximumWidth(40)
+        browse_btn_fused.clicked.connect(lambda checked=False, e=edit_dir_fused: self._browse_dir(e))
+        row_fused.addWidget(browse_btn_fused)
+        layout.addLayout(row_fused)
+
+        status_fused = QLabel()
+        status_fused.setProperty("class", "muted")
+        status_fused.setObjectName("status_edit_2509_telestyle_fused_dir")
+        layout.addWidget(status_fused)
+        self._validate_dir("edit_2509_telestyle_fused_dir", getattr(self._model_paths, "edit_2509_telestyle_fused_dir", ""))
+
+        # SeedVR2 Model directory
+        layout.addWidget(QLabel(""))
+        hint_seedvr2 = QLabel("SeedVR2 Model directory (GGUF + VAE):")
+        hint_seedvr2.setToolTip(
+            "Directory containing SeedVR2 model files (seedvr2_ema_7b-Q8_0.gguf, ema_vae.pth)."
+        )
+        layout.addWidget(hint_seedvr2)
+        row_seedvr2 = QHBoxLayout()
+        edit_dir_seedvr2 = QLineEdit()
+        edit_dir_seedvr2.setText(getattr(self._model_paths, "seedvr2_model_dir", ""))
+        edit_dir_seedvr2.setPlaceholderText("Directory with GGUF + VAE files")
+        edit_dir_seedvr2.textChanged.connect(lambda text: self._validate_dir("seedvr2_model_dir", text))
+        row_seedvr2.addWidget(edit_dir_seedvr2, 1)
+        self._fields["seedvr2_model_dir"] = edit_dir_seedvr2
+
+        browse_btn_seedvr2 = QPushButton("...")
+        browse_btn_seedvr2.setMaximumWidth(40)
+        browse_btn_seedvr2.clicked.connect(lambda checked=False, e=edit_dir_seedvr2: self._browse_dir(e))
+        row_seedvr2.addWidget(browse_btn_seedvr2)
+        layout.addLayout(row_seedvr2)
+
+        status_seedvr2 = QLabel()
+        status_seedvr2.setProperty("class", "muted")
+        status_seedvr2.setObjectName("status_seedvr2_model_dir")
+        layout.addWidget(status_seedvr2)
+        self._validate_dir("seedvr2_model_dir", getattr(self._model_paths, "seedvr2_model_dir", ""))
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         buttons.accepted.connect(self._apply_and_accept)

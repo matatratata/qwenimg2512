@@ -188,10 +188,27 @@ class GenerationWorker(QThread):
 
         # Load LoRA adapter if configured
         lora_path = self._settings.lora_path
+        lora_adapter_names: list[str] = []
         if lora_path and Path(lora_path).is_file():
             self.stage_changed.emit("Loading LoRA adapter...")
             self._pipe.load_lora_weights(lora_path)
             self._lora_active = True
+            # Query real adapter name(s) — diffusers may suffix them (e.g. "default_0")
+            # get_list_adapters() returns {component: [adapter_names...]}, flatten values
+            try:
+                adapters_dict = self._pipe.get_list_adapters()
+                seen: set[str] = set()
+                lora_adapter_names = []
+                for names in adapters_dict.values():
+                    for n in names:
+                        if n not in seen:
+                            seen.add(n)
+                            lora_adapter_names.append(n)
+                if not lora_adapter_names:
+                    lora_adapter_names = ["default"]
+            except Exception:
+                lora_adapter_names = ["default"]
+            logger.info("LoRA adapters loaded: %s", lora_adapter_names)
         else:
             self._lora_active = False
 
@@ -246,11 +263,18 @@ class GenerationWorker(QThread):
                 if lora_step_start <= step <= lora_step_end:
                     t = (step - lora_step_start) / max(lora_step_end - lora_step_start, 1)
                     scale = self._settings.lora_scale_start + t * (self._settings.lora_scale_end - self._settings.lora_scale_start)
-                    self._pipe.set_adapters(["default"], [scale])
+                    self._pipe.set_adapters(lora_adapter_names, [scale] * len(lora_adapter_names))
                 else:
-                    self._pipe.set_adapters(["default"], [0.0])
+                    self._pipe.set_adapters(lora_adapter_names, [0.0] * len(lora_adapter_names))
             self._emit_vram()
             return callback_kwargs
+
+        from qwenimg2512.samplers import get_sampler
+        custom_sampler = None
+        if self._settings.sampler_name != "euler":
+            custom_sampler = get_sampler(self._settings.sampler_name)
+            if custom_sampler is None:
+                logger.warning("Sampler %s not found, falling back to default scheduler", self._settings.sampler_name)
 
         gen_kwargs = {
             "prompt": self._settings.prompt,
@@ -262,6 +286,7 @@ class GenerationWorker(QThread):
             "guidance_scale": self._settings.guidance_scale,
             "generator": torch.Generator(device="cpu").manual_seed(seed),
             "callback_on_step_end": step_callback,
+            "custom_sampler": custom_sampler,
         }
 
         if is_img2img:

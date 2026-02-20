@@ -36,6 +36,8 @@ from qwenimg2512.worker import (
     resize_and_center_crop
 )
 from qwenimg2512.edit_worker import EditWorker
+from qwenimg2512.edit_2509_worker import Edit2509Worker
+from qwenimg2512.seedvr2_worker import SeedVR2Worker
 
 logger = logging.getLogger(__name__)
 
@@ -55,8 +57,8 @@ class MainWindow(QMainWindow):
 
     def _setup_ui(self) -> None:
         self.setWindowTitle("Qwen-Image-2512")
-        self.setMinimumSize(1200, 1000)
-        self.resize(1280, 1280)
+        self.setMinimumSize(1600, 900)
+        self.resize(1920, 1080)
 
         central = QWidget()
         self.setCentralWidget(central)
@@ -91,6 +93,12 @@ class MainWindow(QMainWindow):
         self.settings_widget = ImageSettingsWidget()
         scroll_layout.addWidget(self.settings_widget)
 
+        # Wire effective steps update for img2img
+        self.image_input.strength_changed.connect(lambda _: self._update_effective_steps())
+        self.image_input.image_loaded.connect(lambda _: self._update_effective_steps())
+        self.image_input.image_cleared.connect(self._update_effective_steps)
+        self.settings_widget.steps_spin.valueChanged.connect(lambda _: self._update_effective_steps())
+
         self.lora_widget = LoraSettingsWidget()
         scroll_layout.addWidget(self.lora_widget)
 
@@ -117,6 +125,19 @@ class MainWindow(QMainWindow):
         self.edit_tab.cancel_requested.connect(self._cancel_edit_generation)
         self.tabs.addTab(self.edit_tab, "Edit (2511)")
 
+        # --- Tab 3: Edit (2509) ---
+        self.edit_2509_tab = EditTabWidget()
+        self.edit_2509_tab.generate_requested.connect(self._start_edit_2509_generation)
+        self.edit_2509_tab.cancel_requested.connect(self._cancel_edit_2509_generation)
+        self.tabs.addTab(self.edit_2509_tab, "Edit (2509)")
+
+        # --- Tab 4: SeedVR2 ---
+        from qwenimg2512.widgets.seedvr2_tab import SeedVR2TabWidget
+        self.seedvr2_tab = SeedVR2TabWidget()
+        self.seedvr2_tab.generate_requested.connect(self._start_seedvr2_generation)
+        self.seedvr2_tab.cancel_requested.connect(self._cancel_seedvr2_generation)
+        self.tabs.addTab(self.seedvr2_tab, "SeedVR2")
+
         # Right panel: preview
         self.preview_widget = ImagePreviewWidget()
 
@@ -124,7 +145,7 @@ class MainWindow(QMainWindow):
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.addWidget(self.tabs)
         splitter.addWidget(self.preview_widget)
-        splitter.setSizes([450, 600])
+        splitter.setSizes([900, 1020])
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
 
@@ -164,6 +185,7 @@ class MainWindow(QMainWindow):
         idx = self.settings_widget.model_combo.findText(gs.model_variant)
         if idx >= 0:
             self.settings_widget.model_combo.setCurrentIndex(idx)
+        self.settings_widget.sampler_combo.setCurrentText(gs.sampler_name)
 
         # img2img settings
         self.image_input.set_strength(gs.img2img_strength)
@@ -199,20 +221,71 @@ class MainWindow(QMainWindow):
         idx = self.edit_tab.settings_widget.ratio_combo.findText(es.aspect_ratio)
         if idx >= 0:
             self.edit_tab.settings_widget.ratio_combo.setCurrentIndex(idx)
+        self.edit_tab.settings_widget.sampler_combo.setCurrentText(es.sampler_name)
 
         self.edit_tab.set_reference_images([es.ref_image_1, es.ref_image_2, es.ref_image_3])
+        self.edit_tab.set_fit_modes([es.ref_fit_mode_1, es.ref_fit_mode_2, es.ref_fit_mode_3])
 
         self.edit_tab.lora_widget.set_lora_path(es.lora_path)
         self.edit_tab.lora_widget.set_scale_start(es.lora_scale_start)
         self.edit_tab.lora_widget.set_scale_end(es.lora_scale_end)
         self.edit_tab.lora_widget.set_step_start(es.lora_step_start)
+        self.edit_tab.lora_widget.set_step_start(es.lora_step_start)
         self.edit_tab.lora_widget.set_step_end(es.lora_step_end)
+
+        # Edit 2509 settings
+        es2 = self._config.edit_2509
+        self.edit_2509_tab.prompt_widget.set_prompt(es2.prompt)
+        self.edit_2509_tab.prompt_widget.set_negative_prompt(es2.negative_prompt)
+        self.edit_2509_tab.gen_controls.seed_spin.setValue(es2.seed)
+        self.edit_2509_tab.gen_controls.output_edit.setText(es2.output_dir)
+        self.edit_2509_tab.settings_widget.steps_spin.setValue(es2.num_inference_steps)
+        self.edit_2509_tab.settings_widget.cfg_spin.setValue(es2.true_cfg_scale)
+        self.edit_2509_tab.settings_widget.guidance_spin.setValue(es2.guidance_scale)
+
+        idx = self.edit_2509_tab.settings_widget.ratio_combo.findText(es2.aspect_ratio)
+        if idx >= 0:
+            self.edit_2509_tab.settings_widget.ratio_combo.setCurrentIndex(idx)
+        self.edit_2509_tab.settings_widget.sampler_combo.setCurrentText(es2.sampler_name)
+
+        self.edit_2509_tab.set_reference_images([es2.ref_image_1, es2.ref_image_2, es2.ref_image_3])
+        self.edit_2509_tab.set_fit_modes([es2.ref_fit_mode_1, es2.ref_fit_mode_2, es2.ref_fit_mode_3])
+
+        self.edit_2509_tab.set_telestyle(es2.use_telestyle)
+
+        self.edit_2509_tab.lora_widget.set_lora_path(es2.lora_path)
+        self.edit_2509_tab.lora_widget.set_scale_start(es2.lora_scale_start)
+        self.edit_2509_tab.lora_widget.set_scale_end(es2.lora_scale_end)
+        self.edit_2509_tab.lora_widget.set_step_start(es2.lora_step_start)
+        self.edit_2509_tab.lora_widget.set_step_end(es2.lora_step_end)
+
+        self.edit_2509_tab.lora_widget_2.set_lora_path(es2.lora_path_2)
+        self.edit_2509_tab.lora_widget_2.set_scale_start(es2.lora_scale_start_2)
+        self.edit_2509_tab.lora_widget_2.set_scale_end(es2.lora_scale_end_2)
+        self.edit_2509_tab.lora_widget_2.set_step_start(es2.lora_step_start_2)
+        self.edit_2509_tab.lora_widget_2.set_step_end(es2.lora_step_end_2)
+
+        # SeedVR2 settings
+        sv = self._config.seedvr2
+        self.seedvr2_tab.input_widget.set_image(self._config.seedvr2.input_image)
+        self.seedvr2_tab.depth_map_widget.set_image(self._config.seedvr2.depth_map_path)
+        self.seedvr2_tab.gen_controls.set_output_dir(self._config.seedvr2.output_dir)
+        self.seedvr2_tab.set_resolution(self._config.seedvr2.resolution)
+        self.seedvr2_tab.seed_spin.setValue(sv.seed)
+        self.seedvr2_tab.input_noise_spin.setValue(sv.input_noise_scale)
+        self.seedvr2_tab.latent_noise_spin.setValue(sv.latent_noise_scale)
+        idx = self.seedvr2_tab.color_correction_combo.findText(sv.color_correction)
+        if idx >= 0:
+            self.seedvr2_tab.color_correction_combo.setCurrentIndex(idx)
+        self.seedvr2_tab.vae_tiling_check.setChecked(sv.vae_tiling)
+        self.seedvr2_tab.blocks_swap_spin.setValue(sv.blocks_to_swap)
 
     def _collect_settings(self) -> None:
         gs = self._config.generation
         gs.prompt = self.prompt_widget.get_prompt()
         gs.negative_prompt = self.prompt_widget.get_negative_prompt()
         gs.aspect_ratio = self.settings_widget.get_aspect_ratio()
+        gs.sampler_name = self.settings_widget.get_sampler_name()
         gs.num_inference_steps = self.settings_widget.get_steps()
         gs.true_cfg_scale = self.settings_widget.get_cfg_scale()
         gs.guidance_scale = self.settings_widget.get_guidance_scale()
@@ -239,6 +312,7 @@ class MainWindow(QMainWindow):
         es.prompt = self.edit_tab.prompt_widget.get_prompt()
         es.negative_prompt = self.edit_tab.prompt_widget.get_negative_prompt()
         es.aspect_ratio = self.edit_tab.settings_widget.get_aspect_ratio()
+        es.sampler_name = self.edit_tab.settings_widget.get_sampler_name()
         es.num_inference_steps = self.edit_tab.settings_widget.get_steps()
         es.true_cfg_scale = self.edit_tab.settings_widget.get_cfg_scale()
         es.guidance_scale = self.edit_tab.settings_widget.get_guidance_scale()
@@ -251,10 +325,64 @@ class MainWindow(QMainWindow):
         es.ref_image_3 = refs[2] if len(refs) > 2 else ""
 
         es.lora_path = self.edit_tab.lora_widget.get_lora_path()
+
+        fit_modes = self.edit_tab.get_fit_modes()
+        es.ref_fit_mode_1 = fit_modes[0] if len(fit_modes) > 0 else "cover"
+        es.ref_fit_mode_2 = fit_modes[1] if len(fit_modes) > 1 else "cover"
+        es.ref_fit_mode_3 = fit_modes[2] if len(fit_modes) > 2 else "cover"
         es.lora_scale_start = self.edit_tab.lora_widget.get_scale_start()
         es.lora_scale_end = self.edit_tab.lora_widget.get_scale_end()
         es.lora_step_start = self.edit_tab.lora_widget.get_step_start()
         es.lora_step_end = self.edit_tab.lora_widget.get_step_end()
+
+        # Edit 2509 settings
+        es2 = self._config.edit_2509
+        es2.prompt = self.edit_2509_tab.prompt_widget.get_prompt()
+        es2.negative_prompt = self.edit_2509_tab.prompt_widget.get_negative_prompt()
+        es2.aspect_ratio = self.edit_2509_tab.settings_widget.get_aspect_ratio()
+        es2.sampler_name = self.edit_2509_tab.settings_widget.get_sampler_name()
+        es2.num_inference_steps = self.edit_2509_tab.settings_widget.get_steps()
+        es2.true_cfg_scale = self.edit_2509_tab.settings_widget.get_cfg_scale()
+        es2.guidance_scale = self.edit_2509_tab.settings_widget.get_guidance_scale()
+        es2.seed = self.edit_2509_tab.gen_controls.get_seed()
+        es2.output_dir = self.edit_2509_tab.gen_controls.get_output_dir()
+
+        refs2 = self.edit_2509_tab.get_reference_images()
+        es2.ref_image_1 = refs2[0] if len(refs2) > 0 else ""
+        es2.ref_image_2 = refs2[1] if len(refs2) > 1 else ""
+        es2.ref_image_3 = refs2[2] if len(refs2) > 2 else ""
+
+        es2.use_telestyle = self.edit_2509_tab.get_telestyle()
+
+        es2.lora_path = self.edit_2509_tab.lora_widget.get_lora_path()
+
+        fit_modes2 = self.edit_2509_tab.get_fit_modes()
+        es2.ref_fit_mode_1 = fit_modes2[0] if len(fit_modes2) > 0 else "cover"
+        es2.ref_fit_mode_2 = fit_modes2[1] if len(fit_modes2) > 1 else "cover"
+        es2.ref_fit_mode_3 = fit_modes2[2] if len(fit_modes2) > 2 else "cover"
+        es2.lora_scale_start = self.edit_2509_tab.lora_widget.get_scale_start()
+        es2.lora_scale_end = self.edit_2509_tab.lora_widget.get_scale_end()
+        es2.lora_step_start = self.edit_2509_tab.lora_widget.get_step_start()
+        es2.lora_step_end = self.edit_2509_tab.lora_widget.get_step_end()
+
+        es2.lora_path_2 = self.edit_2509_tab.lora_widget_2.get_lora_path()
+        es2.lora_scale_start_2 = self.edit_2509_tab.lora_widget_2.get_scale_start()
+        es2.lora_scale_end_2 = self.edit_2509_tab.lora_widget_2.get_scale_end()
+        es2.lora_step_start_2 = self.edit_2509_tab.lora_widget_2.get_step_start()
+        es2.lora_step_end_2 = self.edit_2509_tab.lora_widget_2.get_step_end()
+
+        # SeedVR2 settings
+        sv = self._config.seedvr2
+        sv.input_image = self.seedvr2_tab.input_widget.get_image_path()
+        sv.depth_map_path = self.seedvr2_tab.get_depth_map_path()
+        sv.output_dir = self.seedvr2_tab.gen_controls.get_output_dir()
+        sv.resolution = self.seedvr2_tab.get_resolution()
+        sv.seed = self.seedvr2_tab.seed_spin.value()
+        sv.input_noise_scale = self.seedvr2_tab.input_noise_spin.value()
+        sv.latent_noise_scale = self.seedvr2_tab.latent_noise_spin.value()
+        sv.color_correction = self.seedvr2_tab.color_correction_combo.currentText()
+        sv.vae_tiling = self.seedvr2_tab.vae_tiling_check.isChecked()
+        sv.blocks_to_swap = self.seedvr2_tab.blocks_swap_spin.value()
 
     def _save_settings(self) -> None:
         self._collect_settings()
@@ -263,7 +391,11 @@ class MainWindow(QMainWindow):
 
     def _is_busy(self) -> bool:
         gen_running = self._worker and self._worker.isRunning()
-        cap_running = self._captioning_worker and self._captioning_worker.isRunning()
+        try:
+            cap_running = self._captioning_worker and self._captioning_worker.isRunning()
+        except RuntimeError:
+            self._captioning_worker = None
+            cap_running = False
         return bool(gen_running or cap_running)
 
     def _start_edit_generation(self) -> None:
@@ -318,6 +450,111 @@ class MainWindow(QMainWindow):
 
     def _on_edit_vram(self, gb: float) -> None:
         self.edit_tab.set_vram(gb)
+
+    # --- Edit (2509) ---
+
+    def _start_edit_2509_generation(self) -> None:
+        prompt = self.edit_2509_tab.prompt_widget.get_prompt()
+        if not prompt:
+            QMessageBox.warning(self, "Missing Prompt", "Please enter a prompt before generating.")
+            return
+
+        if self._is_busy():
+            QMessageBox.warning(self, "Busy", "Please wait for the current operation to finish.")
+            return
+
+        self._collect_settings()
+        self._config.save()
+
+        self.edit_2509_tab.set_generating(True)
+        self.statusBar().showMessage("Generating (Edit 2509)...")
+
+        self._worker = Edit2509Worker(self._config.edit_2509, self._config.model_paths)
+        self._worker.progress_updated.connect(self._on_edit_2509_progress)
+        self._worker.stage_changed.connect(self._on_edit_2509_stage)
+        self._worker.finished_success.connect(self._on_edit_2509_finished)
+        self._worker.error_occurred.connect(self._on_edit_2509_error)
+        self._worker.vram_updated.connect(self._on_edit_2509_vram)
+        self._worker.start()
+
+    def _cancel_edit_2509_generation(self) -> None:
+        if self._worker and self._worker.isRunning():
+            self._worker.cancel()
+            self.edit_2509_tab.set_generating(False)
+            self.edit_2509_tab.set_stage("Cancelled")
+            self.statusBar().showMessage("Generation cancelled")
+
+    def _on_edit_2509_progress(self, current: int, total: int, message: str) -> None:
+        self.edit_2509_tab.set_progress(current, total, message)
+
+    def _on_edit_2509_stage(self, stage: str) -> None:
+        self.edit_2509_tab.set_stage(stage)
+        self.statusBar().showMessage(stage)
+
+    def _on_edit_2509_finished(self, output_path: str) -> None:
+        self.edit_2509_tab.set_generating(False)
+        self.edit_2509_tab.set_finished(output_path)
+        self.preview_widget.set_image(output_path)
+        self.statusBar().showMessage(f"Image saved: {output_path}")
+
+    def _on_edit_2509_error(self, error: str) -> None:
+        self.edit_2509_tab.set_generating(False)
+        self.edit_2509_tab.set_error(error)
+        self.statusBar().showMessage(f"Error: {error}")
+        QMessageBox.critical(self, "Generation Error", error)
+
+    def _on_edit_2509_vram(self, gb: float) -> None:
+        self.edit_2509_tab.set_vram(gb)
+
+    # --- SeedVR2 ---
+
+    def _start_seedvr2_generation(self) -> None:
+        if not self.seedvr2_tab.input_widget.get_image_path():
+            QMessageBox.warning(self, "Missing Input", "Please select an image to upscale.")
+            return
+
+        if self._is_busy():
+            QMessageBox.warning(self, "Busy", "Please wait for the current operation to finish.")
+            return
+
+        self._collect_settings()
+        self._config.save()
+
+        self.seedvr2_tab.set_generating(True)
+        self.statusBar().showMessage("Upscaling (SeedVR2)...")
+
+        self._worker = SeedVR2Worker(self._config.seedvr2, self._config.model_paths)
+        self._worker.progress_updated.connect(self._on_seedvr2_progress)
+        self._worker.stage_changed.connect(self._on_seedvr2_stage)
+        self._worker.finished_success.connect(self._on_seedvr2_finished)
+        self._worker.error_occurred.connect(self._on_seedvr2_error)
+        self._worker.start()
+
+    def _cancel_seedvr2_generation(self) -> None:
+        if self._worker and self._worker.isRunning():
+            self._worker.cancel()
+            self.seedvr2_tab.set_generating(False)
+            self.seedvr2_tab.set_stage("Cancelled")
+            self.statusBar().showMessage("Upscaling cancelled")
+
+    def _on_seedvr2_progress(self, current: int, total: int, message: str) -> None:
+        self.seedvr2_tab.set_progress(current, total, message)
+
+    def _on_seedvr2_stage(self, stage: str) -> None:
+        self.seedvr2_tab.set_stage(stage)
+        self.statusBar().showMessage(stage)
+
+    def _on_seedvr2_finished(self, output_path: str) -> None:
+        self.seedvr2_tab.set_generating(False)
+        self.seedvr2_tab.set_finished(output_path)
+        self.preview_widget.set_image(output_path)
+        self.statusBar().showMessage(f"Image saved: {output_path}")
+
+    def _on_seedvr2_error(self, error: str) -> None:
+        self.seedvr2_tab.set_generating(False)
+        self.seedvr2_tab.set_error(error)
+        self.statusBar().showMessage(f"Error: {error}")
+        QMessageBox.critical(self, "SeedVR2 Error", error)
 
     def _start_generation(self) -> None:
         prompt = self.prompt_widget.get_prompt()
@@ -389,6 +626,11 @@ class MainWindow(QMainWindow):
     def _on_image_cleared(self) -> None:
         self.statusBar().showMessage("Input image cleared (txt2img mode)")
 
+    def _update_effective_steps(self) -> None:
+        has_image = bool(self.image_input.get_image_path())
+        strength = self.image_input.get_strength()
+        self.settings_widget.update_effective_steps(has_image, strength)
+
     # --- Fit preview ---
 
     def _connect_fit_preview(self) -> None:
@@ -441,7 +683,7 @@ class MainWindow(QMainWindow):
         self._captioning_worker.caption_ready.connect(self._on_caption_ready)
         self._captioning_worker.stage_changed.connect(self._on_caption_stage)
         self._captioning_worker.error_occurred.connect(self._on_caption_error)
-        self._captioning_worker.finished.connect(self._captioning_worker.deleteLater)
+        self._captioning_worker.finished.connect(self._on_captioning_finished)
         self._captioning_worker.start()
 
     def _start_controlnet_captioning(self, image_path: str, control_type: str) -> None:
@@ -469,8 +711,14 @@ class MainWindow(QMainWindow):
         self._captioning_worker.caption_ready.connect(self._on_caption_ready)
         self._captioning_worker.stage_changed.connect(self._on_caption_stage)
         self._captioning_worker.error_occurred.connect(self._on_caption_error)
-        self._captioning_worker.finished.connect(self._captioning_worker.deleteLater)
+        self._captioning_worker.finished.connect(self._on_captioning_finished)
         self._captioning_worker.start()
+
+    def _on_captioning_finished(self) -> None:
+        """Clean up the captioning worker reference before Qt deletes the C++ object."""
+        if self._captioning_worker:
+            self._captioning_worker.deleteLater()
+            self._captioning_worker = None
 
     def _on_caption_ready(self, caption: str) -> None:
         if self._caption_context == "controlnet":
@@ -523,12 +771,21 @@ class MainWindow(QMainWindow):
             subprocess.Popen(["xdg-open", str(output_dir)])  # noqa: S603, S607
 
     def closeEvent(self, event: object) -> None:
-        if self._worker and self._worker.isRunning():
-            self._worker.cancel()
-            self._worker.wait(5000)
-        if self._captioning_worker and self._captioning_worker.isRunning():
-            self._captioning_worker.cancel()
-            self._captioning_worker.wait(5000)
+        if self._worker:
+            try:
+                if self._worker.isRunning():
+                    self._worker.cancel()
+                    self._worker.wait(5000)
+            except RuntimeError:
+                pass  # Worker already deleted
+
+        if self._captioning_worker:
+            try:
+                if self._captioning_worker.isRunning():
+                    self._captioning_worker.cancel()
+                    self._captioning_worker.wait(5000)
+            except RuntimeError:
+                pass  # Worker already deleted
         self._collect_settings()
         self._config.save()
         super().closeEvent(event)

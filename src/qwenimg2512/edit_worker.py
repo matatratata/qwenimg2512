@@ -29,7 +29,6 @@ class EditWorker(QThread):
         self._model_paths = model_paths
         self._is_cancelled = False
         self._pipe = None
-        self._lora_active = False
 
     def cancel(self) -> None:
         self._is_cancelled = True
@@ -60,22 +59,24 @@ class EditWorker(QThread):
         self._pipe = self._load_gguf_pipeline()
         self._raise_if_cancelled()
 
-        # Load LoRA
-        lora_path = self._settings.lora_path
-        if lora_path and Path(lora_path).is_file():
-            self.stage_changed.emit("Loading LoRA adapter...")
-            self._pipe.load_lora_weights(lora_path)
-            self._lora_active = True
-        else:
-            self._lora_active = False
-
         self._emit_vram()
 
         self.stage_changed.emit("Processing reference images...")
         ref_images = []
-        for path in [self._settings.ref_image_1, self._settings.ref_image_2, self._settings.ref_image_3]:
+        fit_modes = [
+            self._settings.ref_fit_mode_1,
+            self._settings.ref_fit_mode_2,
+            self._settings.ref_fit_mode_3,
+        ]
+        width, height = ASPECT_RATIOS[self._settings.aspect_ratio]
+        for i, path in enumerate([self._settings.ref_image_1, self._settings.ref_image_2, self._settings.ref_image_3]):
             if path and Path(path).is_file():
                 img = Image.open(path).convert("RGB")
+                mode = fit_modes[i] if i < len(fit_modes) else "cover"
+                if mode != "cover":
+                    from qwenimg2512.resize_utils import resize_with_fit_mode
+                    img = resize_with_fit_mode(img, width, height, mode)
+                    logger.info("Ref image %d resized %s → %dx%d", i + 1, mode, img.width, img.height)
                 ref_images.append(img)
         
         if not ref_images:
@@ -87,10 +88,6 @@ class EditWorker(QThread):
         seed = self._settings.seed if self._settings.seed >= 0 else random.randint(0, 2**32 - 1)
 
         step_start = time.monotonic()
-        lora_step_start = self._settings.lora_step_start
-        lora_step_end = self._settings.lora_step_end
-        if lora_step_end < 0:
-            lora_step_end = self._settings.num_inference_steps - 1
 
         def step_callback(pipe: object, step: int, timestep: object, callback_kwargs: dict) -> dict:
             self._raise_if_cancelled()
@@ -102,18 +99,15 @@ class EditWorker(QThread):
                 self._settings.num_inference_steps,
                 f"Step {step}/{self._settings.num_inference_steps} | {remaining:.0f}s remaining",
             )
-            
-            # LoRA Scaling
-            if self._lora_active:
-                if lora_step_start <= step <= lora_step_end:
-                    t = (step - lora_step_start) / max(lora_step_end - lora_step_start, 1)
-                    scale = self._settings.lora_scale_start + t * (self._settings.lora_scale_end - self._settings.lora_scale_start)
-                    self._pipe.set_adapters(["default"], [scale])
-                else:
-                    self._pipe.set_adapters(["default"], [0.0])
-            
             self._emit_vram()
             return callback_kwargs
+
+        from qwenimg2512.samplers import get_sampler
+        custom_sampler = None
+        if self._settings.sampler_name != "euler":
+            custom_sampler = get_sampler(self._settings.sampler_name)
+            if custom_sampler is None:
+                logger.warning("Sampler %s not found, falling back to default scheduler", self._settings.sampler_name)
 
         gen_kwargs = {
             "prompt": self._settings.prompt,
@@ -126,6 +120,7 @@ class EditWorker(QThread):
             "guidance_scale": self._settings.guidance_scale,
             "generator": torch.Generator(device="cpu").manual_seed(seed),
             "callback_on_step_end": step_callback,
+            "custom_sampler": custom_sampler,
         }
 
         # Clear VRAM
@@ -185,6 +180,17 @@ class EditWorker(QThread):
             transformer=transformer,
             torch_dtype=torch.bfloat16,
         )
+
+        # ── Load LoRA on CPU, fuse into base weights, free adapters ──
+        lora_path = self._settings.lora_path
+        if lora_path and Path(lora_path).is_file():
+            self.stage_changed.emit("Loading LoRA adapter (CPU)...")
+            pipe.load_lora_weights(lora_path, adapter_name="default")
+            pipe.set_adapters(["default"], [self._settings.lora_scale_start])
+            self.stage_changed.emit("Fusing LoRA into model...")
+            pipe.fuse_lora()
+            pipe.unload_lora_weights()
+            logger.info("LoRA fused (scale=%.2f) from %s", self._settings.lora_scale_start, lora_path)
 
         num_gpus = torch.cuda.device_count()
         if num_gpus >= 2:

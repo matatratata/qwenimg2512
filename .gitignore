@@ -2,3 +2,6 @@
 src/qwenimg2512/__pycache__
 src/qwenimg2512/styles/__pycache__
 src/qwenimg2512/widgets/__pycache__
+.vscode
+.vscode
+src/qwenimg2512/samplers/__pycache__
