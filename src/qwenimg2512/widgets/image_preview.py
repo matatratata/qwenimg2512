@@ -10,9 +10,12 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import (
     QGroupBox,
+    QHBoxLayout,
     QLabel,
+    QPushButton,
     QSizePolicy,
     QVBoxLayout,
+    QWidget,
 )
 
 
@@ -47,6 +50,22 @@ class ImagePreviewWidget(QGroupBox):
         self.info_label.setProperty("class", "muted")
         layout.addWidget(self.info_label)
 
+        # Quick Actions Row
+        self.actions_widget = QWidget()
+        act_layout = QHBoxLayout(self.actions_widget)
+        act_layout.setContentsMargins(0, 10, 0, 0)
+
+        self.btn_send_edit = QPushButton("✏️ Send to Edit")
+        self.btn_send_wan = QPushButton("🎬 Make Cinematic (Wan)")
+        self.btn_send_seedvr2 = QPushButton("🔍 Upscale (SeedVR2)")
+
+        act_layout.addWidget(self.btn_send_edit)
+        act_layout.addWidget(self.btn_send_wan)
+        act_layout.addWidget(self.btn_send_seedvr2)
+
+        layout.addWidget(self.actions_widget)
+        self.actions_widget.setVisible(False)
+
     def set_image(self, path: str) -> None:
         """Show a generated output image (replaces any fit preview)."""
         self._mode = "generated"
@@ -63,6 +82,10 @@ class ImagePreviewWidget(QGroupBox):
         self.info_label.setText(
             f"{self._pixmap.width()}x{self._pixmap.height()} | {size_str} | {Path(path).name}"
         )
+        if path.lower().endswith((".png", ".jpg", ".jpeg", ".webp")):
+            self.actions_widget.setVisible(True)
+        else:
+            self.actions_widget.setVisible(False)
 
     def show_fit_preview(self, images: list[tuple[Image.Image, str]], target_w: int, target_h: int) -> None:
         """Show cover-crop preview of input/control images at target dimensions.
@@ -108,6 +131,7 @@ class ImagePreviewWidget(QGroupBox):
         self.image_label.clear()
         self.image_label.setText("No image generated yet")
         self.info_label.setText("")
+        self.actions_widget.setVisible(False)
 
     def _update_scaled_pixmap(self) -> None:
         if self._pixmap and not self._pixmap.isNull():
@@ -129,3 +153,4 @@ class ImagePreviewWidget(QGroupBox):
         self.image_label.clear()
         self.image_label.setText("No image generated yet")
         self.info_label.setText("")
+        self.actions_widget.setVisible(False)

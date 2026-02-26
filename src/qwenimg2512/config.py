@@ -58,6 +58,8 @@ class ModelPaths:
     seedvr2_vae: str = str(_MODELS_DIR / "SeedVR2" / "ema_vae.pth")
     seedvr2_model_dir: str = str(_MODELS_DIR / "SeedVR2")
     seedvr2_cli: str = str(Path.home() / "AI" / "ComfyUI-SeedVR2_VideoUpscaler" / "inference_cli.py")
+    wan_gguf: str = str(_MODELS_DIR / "Wan2.2-I2V-A14B-GGUF" / "wan2.2_i2v_low_noise_14B_Q8_0.gguf")
+    wan_base_model_dir: str = str(_MODELS_DIR / "Wan2.2-I2V-A14B-Diffusers")
 
 
 @dataclass
@@ -156,12 +158,29 @@ class SeedVR2Settings:
     vae_tiling: bool = True
     blocks_to_swap: int = 0
 
+
+@dataclass
+class WanSettings:
+    input_image: str = ""
+    prompt: str = "Cinematic slow pan, volumetric fog, anamorphic lens flare, 35mm film grain, 8k resolution, highly detailed movie still"
+    negative_prompt: str = "low quality, worst quality, deformed, distorted, watermark"
+    resolution: str = "832x480"
+    frames: int = 33
+    num_inference_steps: int = 40
+    guidance_scale: float = 5.0
+    shift: float = 5.0
+    seed: int = -1
+    output_dir: str = str(Path.home() / "Pictures" / "qwenimg2512")
+    extract_still: bool = True
+
+
 @dataclass
 class Config:
     generation: GenerationSettings = field(default_factory=GenerationSettings)
     edit: EditSettings = field(default_factory=EditSettings)
     edit_2509: Edit2509Settings = field(default_factory=Edit2509Settings)
     seedvr2: SeedVR2Settings = field(default_factory=SeedVR2Settings)
+    wan: WanSettings = field(default_factory=WanSettings)
     model_paths: ModelPaths = field(default_factory=ModelPaths)
 
     def save(self) -> None:
@@ -179,12 +198,14 @@ class Config:
             edit = _filter_kwargs(EditSettings, data.get("edit", {}))
             edit_2509 = _filter_kwargs(Edit2509Settings, data.get("edit_2509", {}))
             seedvr2 = _filter_kwargs(SeedVR2Settings, data.get("seedvr2", {}))
+            wan = _filter_kwargs(WanSettings, data.get("wan", {}))
             paths = _filter_kwargs(ModelPaths, data.get("model_paths", {}))
             return cls(
                 generation=GenerationSettings(**gen),
                 edit=EditSettings(**edit),
                 edit_2509=Edit2509Settings(**edit_2509),
                 seedvr2=SeedVR2Settings(**seedvr2),
+                wan=WanSettings(**wan),
                 model_paths=ModelPaths(**paths),
             )
         except Exception:

@@ -38,6 +38,7 @@ from qwenimg2512.worker import (
 from qwenimg2512.edit_worker import EditWorker
 from qwenimg2512.edit_2509_worker import Edit2509Worker
 from qwenimg2512.seedvr2_worker import SeedVR2Worker
+from qwenimg2512.wan_worker import WanWorker
 
 logger = logging.getLogger(__name__)
 
@@ -138,8 +139,18 @@ class MainWindow(QMainWindow):
         self.seedvr2_tab.cancel_requested.connect(self._cancel_seedvr2_generation)
         self.tabs.addTab(self.seedvr2_tab, "SeedVR2")
 
+        # --- Tab 5: Wan Cinematic ---
+        from qwenimg2512.widgets.wan_tab import WanTabWidget
+        self.wan_tab = WanTabWidget()
+        self.wan_tab.generate_requested.connect(self._start_wan_generation)
+        self.wan_tab.cancel_requested.connect(self._cancel_wan_generation)
+        self.tabs.addTab(self.wan_tab, "Wan Cinematic")
+
         # Right panel: preview
         self.preview_widget = ImagePreviewWidget()
+        self.preview_widget.btn_send_wan.clicked.connect(self._quick_action_send_wan)
+        self.preview_widget.btn_send_edit.clicked.connect(self._quick_action_send_edit)
+        self.preview_widget.btn_send_seedvr2.clicked.connect(self._quick_action_send_seedvr2)
 
         # Splitter
         splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -280,6 +291,22 @@ class MainWindow(QMainWindow):
         self.seedvr2_tab.vae_tiling_check.setChecked(sv.vae_tiling)
         self.seedvr2_tab.blocks_swap_spin.setValue(sv.blocks_to_swap)
 
+        # Wan settings
+        ws = self._config.wan
+        self.wan_tab.input_widget.set_image(ws.input_image)
+        self.wan_tab.prompt_widget.set_prompt(ws.prompt)
+        self.wan_tab.prompt_widget.set_negative_prompt(ws.negative_prompt)
+        idx = self.wan_tab.res_combo.findText(ws.resolution)
+        if idx >= 0:
+            self.wan_tab.res_combo.setCurrentIndex(idx)
+        self.wan_tab.frames_spin.setValue(ws.frames)
+        self.wan_tab.steps_spin.setValue(ws.num_inference_steps)
+        self.wan_tab.guidance_spin.setValue(ws.guidance_scale)
+        self.wan_tab.shift_spin.setValue(ws.shift)
+        self.wan_tab.extract_still_check.setChecked(ws.extract_still)
+        self.wan_tab.gen_controls.seed_spin.setValue(ws.seed)
+        self.wan_tab.gen_controls.set_output_dir(ws.output_dir)
+
     def _collect_settings(self) -> None:
         gs = self._config.generation
         gs.prompt = self.prompt_widget.get_prompt()
@@ -383,6 +410,20 @@ class MainWindow(QMainWindow):
         sv.color_correction = self.seedvr2_tab.color_correction_combo.currentText()
         sv.vae_tiling = self.seedvr2_tab.vae_tiling_check.isChecked()
         sv.blocks_to_swap = self.seedvr2_tab.blocks_swap_spin.value()
+
+        # Wan settings
+        ws = self._config.wan
+        ws.input_image = self.wan_tab.input_widget.get_image_path()
+        ws.prompt = self.wan_tab.prompt_widget.get_prompt()
+        ws.negative_prompt = self.wan_tab.prompt_widget.get_negative_prompt()
+        ws.resolution = self.wan_tab.res_combo.currentText()
+        ws.frames = self.wan_tab.frames_spin.value()
+        ws.num_inference_steps = self.wan_tab.steps_spin.value()
+        ws.guidance_scale = self.wan_tab.guidance_spin.value()
+        ws.shift = self.wan_tab.shift_spin.value()
+        ws.extract_still = self.wan_tab.extract_still_check.isChecked()
+        ws.seed = self.wan_tab.gen_controls.get_seed()
+        ws.output_dir = self.wan_tab.gen_controls.get_output_dir()
 
     def _save_settings(self) -> None:
         self._collect_settings()
@@ -555,6 +596,80 @@ class MainWindow(QMainWindow):
         self.seedvr2_tab.set_error(error)
         self.statusBar().showMessage(f"Error: {error}")
         QMessageBox.critical(self, "SeedVR2 Error", error)
+
+    # --- Wan Cinematic ---
+
+    def _start_wan_generation(self) -> None:
+        if not self.wan_tab.input_widget.get_image_path():
+            QMessageBox.warning(self, "Missing Input", "Please select an image to enhance.")
+            return
+
+        if self._is_busy():
+            QMessageBox.warning(self, "Busy", "Please wait for the current operation to finish.")
+            return
+
+        self._collect_settings()
+        self._config.save()
+
+        self.wan_tab.set_generating(True)
+        self.statusBar().showMessage("Generating Cinematic Sequence (Wan 2.2)...")
+
+        self._worker = WanWorker(self._config.wan, self._config.model_paths)
+        self._worker.progress_updated.connect(self.wan_tab.set_progress)
+        self._worker.stage_changed.connect(lambda s: (self.wan_tab.set_stage(s), self.statusBar().showMessage(s)))
+        self._worker.vram_updated.connect(self.wan_tab.set_vram)
+        self._worker.finished_success.connect(self._on_wan_finished)
+        self._worker.error_occurred.connect(self._on_wan_error)
+        self._worker.start()
+
+    def _cancel_wan_generation(self) -> None:
+        if self._worker and self._worker.isRunning():
+            self._worker.cancel()
+            self.wan_tab.set_generating(False)
+            self.wan_tab.set_stage("Cancelled")
+            self.statusBar().showMessage("Wan generation cancelled")
+
+    def _on_wan_finished(self, output_path: str) -> None:
+        self.wan_tab.set_generating(False)
+        self.wan_tab.set_finished(output_path)
+        if output_path.lower().endswith((".png", ".jpg", ".jpeg", ".webp")):
+            self.preview_widget.set_image(output_path)
+        else:
+            self.preview_widget.clear()
+            self.preview_widget.info_label.setText(f"Video saved to: {output_path}")
+        self.statusBar().showMessage(f"Wan output saved: {output_path}")
+
+    def _on_wan_error(self, error: str) -> None:
+        self.wan_tab.set_generating(False)
+        self.wan_tab.set_error(error)
+        self.statusBar().showMessage(f"Error: {error}")
+        QMessageBox.critical(self, "Wan Error", error)
+
+    # --- Quick Actions (Image Preview) ---
+
+    def _quick_action_send_wan(self) -> None:
+        if self.preview_widget._current_path:
+            self.wan_tab.input_widget.set_image(self.preview_widget._current_path)
+            for i in range(self.tabs.count()):
+                if self.tabs.tabText(i) == "Wan Cinematic":
+                    self.tabs.setCurrentIndex(i)
+                    break
+
+    def _quick_action_send_edit(self) -> None:
+        if self.preview_widget._current_path:
+            self.edit_2509_tab.set_reference_images([self.preview_widget._current_path])
+            for i in range(self.tabs.count()):
+                if self.tabs.tabText(i) == "Edit (2509)":
+                    self.tabs.setCurrentIndex(i)
+                    break
+
+    def _quick_action_send_seedvr2(self) -> None:
+        if self.preview_widget._current_path:
+            self.seedvr2_tab.input_widget.set_image(self.preview_widget._current_path)
+            for i in range(self.tabs.count()):
+                if self.tabs.tabText(i) == "SeedVR2":
+                    self.tabs.setCurrentIndex(i)
+                    break
 
     def _start_generation(self) -> None:
         prompt = self.prompt_widget.get_prompt()

@@ -197,10 +197,9 @@ class Edit2509Worker(QThread):
             if path and Path(path).is_file():
                 img = Image.open(path).convert("RGB")
                 mode = fit_modes[i] if i < len(fit_modes) else "cover"
-                if mode != "cover":
-                    from qwenimg2512.resize_utils import resize_with_fit_mode
-                    img = resize_with_fit_mode(img, width, height, mode)
-                    logger.info("Ref image %d resized %s → %dx%d", i + 1, mode, img.width, img.height)
+                from qwenimg2512.resize_utils import resize_with_fit_mode
+                img = resize_with_fit_mode(img, width, height, mode)
+                logger.info("Ref image %d resized %s → %dx%d", i + 1, mode, img.width, img.height)
                 ref_images.append(img)
         if not ref_images:
             raise ValueError("At least one reference image is required for editing.")
@@ -277,7 +276,6 @@ class Edit2509Worker(QThread):
             "callback_on_step_end": step_callback,
             "prompt_embeds": prompt_embeds.to(target_device),
             "prompt_embeds_mask": prompt_mask.to(target_device),
-            "custom_sampler": custom_sampler,
         }
         if neg_embeds is not None:
             logger.info("Moving negative_prompt_embeds to %s", target_device)
@@ -291,7 +289,9 @@ class Edit2509Worker(QThread):
         self._emit_vram()
 
         logger.info("Starting pipeline.__call__ ...")
-        output = pipe(**gen_kwargs)
+        from qwenimg2512.pipeline_patch import apply_custom_sampler
+        with apply_custom_sampler(pipe, custom_sampler):
+            output = pipe(**gen_kwargs)
         _log_gpu_memory("inference:done")
         self._raise_if_cancelled()
 
@@ -382,32 +382,58 @@ class Edit2509Worker(QThread):
             "consistency with the original input where appropriate.<|im_end|>\n"
             "<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n"
         )
-        drop_idx = 64
+        neg_template = (
+            "<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n"
+            "<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n"
+        )
 
-        def _encode_one(prompt_text: str, label: str) -> tuple[torch.Tensor, torch.Tensor]:
+        def _encode_one(prompt_text: str, label: str, is_negative: bool = False) -> tuple[torch.Tensor, torch.Tensor]:
             logger.info("Encoding %s on %s: %r", label, encoder_device, prompt_text[:80])
-            img_prompt = "".join(
-                f"Picture {i + 1}: <|vision_start|><|image_pad|><|vision_end|>"
-                for i in range(len(condition_images))
-            )
-            txt = [prompt_template.format(img_prompt + prompt_text)]
 
-            model_inputs = processor(
-                text=txt,
-                images=condition_images,
-                padding=True,
-                return_tensors="pt",
-            ).to(encoder_device)
+            if is_negative:
+                txt = [neg_template.format(prompt_text)]
+                images = None
+                prefix = neg_template.split("{}")[0]
+                drop_idx = len(tokenizer.encode(prefix))
+            else:
+                img_prompt = "".join(
+                    f"Picture {i + 1}: <|vision_start|><|image_pad|><|vision_end|>\n"
+                    for i in range(len(condition_images))
+                )
+                txt = [prompt_template.format(img_prompt + prompt_text)]
+                images = condition_images
+                prefix = prompt_template.split("{}")[0]
+                drop_idx = len(tokenizer.encode(prefix))
+
+            if images is not None:
+                model_inputs = processor(
+                    text=txt,
+                    images=images,
+                    padding=True,
+                    return_tensors="pt",
+                ).to(encoder_device)
+            else:
+                model_inputs = processor(
+                    text=txt,
+                    padding=True,
+                    return_tensors="pt",
+                ).to(encoder_device)
+
             _log_gpu_memory(f"{label}:inputs ready")
 
             with torch.no_grad():
-                outputs = text_encoder(
-                    input_ids=model_inputs.input_ids,
-                    attention_mask=model_inputs.attention_mask,
-                    pixel_values=model_inputs.pixel_values,
-                    image_grid_thw=model_inputs.image_grid_thw,
-                    output_hidden_states=True,
-                )
+                kwargs = {
+                    "input_ids": model_inputs.input_ids,
+                    "attention_mask": model_inputs.attention_mask,
+                    "output_hidden_states": True,
+                }
+                if images is not None:
+                    if hasattr(model_inputs, "pixel_values") and model_inputs.pixel_values is not None:
+                        kwargs["pixel_values"] = model_inputs.pixel_values
+                    if hasattr(model_inputs, "image_grid_thw") and model_inputs.image_grid_thw is not None:
+                        kwargs["image_grid_thw"] = model_inputs.image_grid_thw
+
+                outputs = text_encoder(**kwargs)
             _log_gpu_memory(f"{label}:forward done")
 
             hidden = outputs.hidden_states[-1]
@@ -431,13 +457,13 @@ class Edit2509Worker(QThread):
             return embeds_cpu, attn_cpu
 
         self.stage_changed.emit("Encoding prompt...")
-        prompt_embeds, prompt_mask = _encode_one(self._settings.prompt, "positive")
+        prompt_embeds, prompt_mask = _encode_one(self._settings.prompt, "positive", is_negative=False)
 
         neg_embeds, neg_mask = None, None
         neg_prompt = self._settings.negative_prompt
         if neg_prompt and self._settings.true_cfg_scale > 1:
             self.stage_changed.emit("Encoding negative prompt...")
-            neg_embeds, neg_mask = _encode_one(neg_prompt, "negative")
+            neg_embeds, neg_mask = _encode_one(neg_prompt, "negative", is_negative=True)
 
         _free_gpu_memory("encoding complete")
         self._emit_vram()

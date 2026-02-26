@@ -150,4 +150,16 @@ else
     echo "SeedVR2 CLI already present at $SEEDVR2_CLI_DIR"
 fi
 
+# 13. Wan 2.2 I2V GGUF
+download_file \
+    "bullerwins/Wan2.2-I2V-A14B-GGUF" \
+    "wan2.2_i2v_low_noise_14B_Q8_0.gguf" \
+    "$BASE_DIR/Wan2.2-I2V-A14B-GGUF"
+
+# 14. Wan 2.2 I2V Diffusers (Encoders, VAE, etc.)
+download_repo \
+    "Wan-AI/Wan2.2-I2V-A14B-Diffusers" \
+    "$BASE_DIR/Wan2.2-I2V-A14B-Diffusers" \
+    "text_encoder/*" "vae/*" "vision_encoder/*" "tokenizer/*" "scheduler/*" "model_index.json"
+
 echo "All downloads complete!"

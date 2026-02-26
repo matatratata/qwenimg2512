@@ -73,10 +73,9 @@ class EditWorker(QThread):
             if path and Path(path).is_file():
                 img = Image.open(path).convert("RGB")
                 mode = fit_modes[i] if i < len(fit_modes) else "cover"
-                if mode != "cover":
-                    from qwenimg2512.resize_utils import resize_with_fit_mode
-                    img = resize_with_fit_mode(img, width, height, mode)
-                    logger.info("Ref image %d resized %s → %dx%d", i + 1, mode, img.width, img.height)
+                from qwenimg2512.resize_utils import resize_with_fit_mode
+                img = resize_with_fit_mode(img, width, height, mode)
+                logger.info("Ref image %d resized %s → %dx%d", i + 1, mode, img.width, img.height)
                 ref_images.append(img)
         
         if not ref_images:
@@ -120,7 +119,6 @@ class EditWorker(QThread):
             "guidance_scale": self._settings.guidance_scale,
             "generator": torch.Generator(device="cpu").manual_seed(seed),
             "callback_on_step_end": step_callback,
-            "custom_sampler": custom_sampler,
         }
 
         # Clear VRAM
@@ -129,7 +127,9 @@ class EditWorker(QThread):
         torch.cuda.empty_cache()
         self._emit_vram()
 
-        output = self._pipe(**gen_kwargs)
+        from qwenimg2512.pipeline_patch import apply_custom_sampler
+        with apply_custom_sampler(self._pipe, custom_sampler):
+            output = self._pipe(**gen_kwargs)
         self._raise_if_cancelled()
 
         image = output.images[0]

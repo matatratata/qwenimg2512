@@ -47,6 +47,7 @@ class ModelPathsDialog(QDialog):
             "seedvr2_gguf": "SeedVR2 GGUF:",
             "seedvr2_vae": "SeedVR2 VAE:",
             "seedvr2_cli": "SeedVR2 CLI (inference_cli.py):",
+            "wan_gguf": "Wan 2.2 GGUF:",
         }
 
         filters = {
@@ -63,6 +64,7 @@ class ModelPathsDialog(QDialog):
             "seedvr2_gguf": "GGUF Files (*.gguf)",
             "seedvr2_vae": "PyTorch Files (*.pth)",
             "seedvr2_cli": "Python Files (*.py)",
+            "wan_gguf": "GGUF Files (*.gguf)",
         }
 
         for field_name, label_text in labels.items():
@@ -229,6 +231,31 @@ class ModelPathsDialog(QDialog):
         status_seedvr2.setObjectName("status_seedvr2_model_dir")
         layout.addWidget(status_seedvr2)
         self._validate_dir("seedvr2_model_dir", getattr(self._model_paths, "seedvr2_model_dir", ""))
+
+        # Wan Diffusers Base Directory
+        layout.addWidget(QLabel(""))
+        hint_wan = QLabel("Wan Diffusers Base Directory (Encoders/VAE):")
+        hint_wan.setToolTip("Directory containing Wan 2.2 Diffusers components (text_encoder, vae, etc.)")
+        layout.addWidget(hint_wan)
+        row_wan = QHBoxLayout()
+        edit_dir_wan = QLineEdit()
+        edit_dir_wan.setText(getattr(self._model_paths, "wan_base_model_dir", ""))
+        edit_dir_wan.setPlaceholderText("Directory with Wan components")
+        edit_dir_wan.textChanged.connect(lambda text: self._validate_dir("wan_base_model_dir", text))
+        row_wan.addWidget(edit_dir_wan, 1)
+        self._fields["wan_base_model_dir"] = edit_dir_wan
+
+        browse_btn_wan = QPushButton("...")
+        browse_btn_wan.setMaximumWidth(40)
+        browse_btn_wan.clicked.connect(lambda checked=False, e=edit_dir_wan: self._browse_dir(e))
+        row_wan.addWidget(browse_btn_wan)
+        layout.addLayout(row_wan)
+
+        status_wan = QLabel()
+        status_wan.setProperty("class", "muted")
+        status_wan.setObjectName("status_wan_base_model_dir")
+        layout.addWidget(status_wan)
+        self._validate_dir("wan_base_model_dir", getattr(self._model_paths, "wan_base_model_dir", ""))
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         buttons.accepted.connect(self._apply_and_accept)

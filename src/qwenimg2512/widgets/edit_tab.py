@@ -277,6 +277,10 @@ class EditTabWidget(QWidget):
 
         # 1. Prompt Input
         self.prompt_widget = PromptInputWidget()
+        self.prompt_widget.positive_input.setPlaceholderText(
+            "Describe the edit. For multiple images, reference them as 'Picture 1', 'Picture 2', etc.\n"
+            "Example: 'Replace the character in Picture 1 with the person from Picture 2.'"
+        )
         content_layout.addWidget(self.prompt_widget)
 
         # 2. Reference Images (3 slots)
