@@ -19,7 +19,8 @@ from PySide6.QtWidgets import (
 from qwenimg2512.widgets.generation_controls import GenerationControlsWidget
 from qwenimg2512.widgets.prompt_input import PromptInputWidget
 from qwenimg2512.widgets.seedvr2_tab import SeedVR2InputWidget
-
+from qwenimg2512.samplers import SAMPLER_NAMES, SAMPLER_DESCRIPTIONS
+from qwenimg2512.schedules import SCHEDULE_NAMES, SCHEDULE_DESCRIPTIONS
 
 class WanTabWidget(QWidget):
     generate_requested = Signal()
@@ -92,6 +93,25 @@ class WanTabWidget(QWidget):
         steps_row.addWidget(self.shift_spin, 1)
         settings_layout.addLayout(steps_row)
 
+        sampler_row = QHBoxLayout()
+        sampler_row.addWidget(QLabel("Sampler:"))
+        self.sampler_combo = QComboBox()
+        for name in SAMPLER_NAMES:
+            self.sampler_combo.addItem(name)
+        for i, name in enumerate(SAMPLER_NAMES):
+            self.sampler_combo.setItemData(i, SAMPLER_DESCRIPTIONS.get(name, ""), Qt.ItemDataRole.ToolTipRole)
+        sampler_row.addWidget(self.sampler_combo, 1)
+
+        sampler_row.addWidget(QLabel("Schedule:"))
+        self.schedule_combo = QComboBox()
+        for name in SCHEDULE_NAMES:
+            self.schedule_combo.addItem(name)
+        for i, name in enumerate(SCHEDULE_NAMES):
+            self.schedule_combo.setItemData(i, SCHEDULE_DESCRIPTIONS.get(name, ""), Qt.ItemDataRole.ToolTipRole)
+        sampler_row.addWidget(self.schedule_combo, 1)
+        
+        settings_layout.addLayout(sampler_row)
+
         self.extract_still_check = QCheckBox("Extract Cinematic Still (PNG)")
         self.extract_still_check.setChecked(True)
         self.extract_still_check.setToolTip(
@@ -119,6 +139,8 @@ class WanTabWidget(QWidget):
         self.steps_spin.setEnabled(not generating)
         self.guidance_spin.setEnabled(not generating)
         self.shift_spin.setEnabled(not generating)
+        self.sampler_combo.setEnabled(not generating)
+        self.schedule_combo.setEnabled(not generating)
         self.extract_still_check.setEnabled(not generating)
 
     def set_progress(self, current: int, total: int, message: str) -> None:

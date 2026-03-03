@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
 
 from qwenimg2512.config import ASPECT_RATIOS, MODEL_VARIANTS
 from qwenimg2512.samplers import SAMPLER_NAMES, SAMPLER_DESCRIPTIONS
+from qwenimg2512.schedules import SCHEDULE_NAMES, SCHEDULE_DESCRIPTIONS
 
 
 class ImageSettingsWidget(QGroupBox):
@@ -61,6 +62,21 @@ class ImageSettingsWidget(QGroupBox):
         sampler_row.addWidget(self.sampler_combo, 1)
         layout.addLayout(sampler_row)
 
+        # Schedule
+        schedule_row = QHBoxLayout()
+        schedule_row.addWidget(QLabel("Schedule:"))
+        self.schedule_combo = QComboBox()
+        for name in SCHEDULE_NAMES:
+            self.schedule_combo.addItem(name)
+            
+        for i, name in enumerate(SCHEDULE_NAMES):
+            self.schedule_combo.setItemData(i, SCHEDULE_DESCRIPTIONS.get(name, ""), Qt.ItemDataRole.ToolTipRole)
+            
+        self.schedule_combo.setToolTip("Select the sigma schedule (beta57/bong_tangent)")
+        self.schedule_combo.currentTextChanged.connect(lambda _: self.settings_changed.emit())
+        schedule_row.addWidget(self.schedule_combo, 1)
+        layout.addLayout(schedule_row)
+
         # Inference steps
         steps_row = QHBoxLayout()
         steps_row.addWidget(QLabel("Steps:"))
@@ -84,7 +100,7 @@ class ImageSettingsWidget(QGroupBox):
         cfg_row = QHBoxLayout()
         cfg_row.addWidget(QLabel("CFG Scale:"))
         self.cfg_spin = QDoubleSpinBox()
-        self.cfg_spin.setRange(1.0, 10.0)
+        self.cfg_spin.setRange(1.0, 20.0)
         self.cfg_spin.setValue(4.0)
         self.cfg_spin.setSingleStep(0.5)
         self.cfg_spin.setDecimals(1)
@@ -127,6 +143,9 @@ class ImageSettingsWidget(QGroupBox):
 
     def get_sampler_name(self) -> str:
         return self.sampler_combo.currentText()
+
+    def get_schedule_name(self) -> str:
+        return self.schedule_combo.currentText()
 
     def get_cfg_scale(self) -> float:
         return self.cfg_spin.value()

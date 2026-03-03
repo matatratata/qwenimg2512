@@ -83,7 +83,7 @@ class DPMPlusPlus2MDiffusionStep(BaseDiffusionStep):
         # Handle final step (sigma_next = 0)
         if sigma_next == 0:
             # Store for next generation consistency
-            self._state_by_shape[shape_key] = (denoised_sample.clone(), sigma.clone())
+            self._state_by_shape[shape_key] = (denoised_sample.detach().clone(), sigma.detach().clone())
             return denoised_sample
 
         # Convert to continuous time
@@ -115,7 +115,7 @@ class DPMPlusPlus2MDiffusionStep(BaseDiffusionStep):
             x_next = (sigma_next / sigma) * sample + (1 - sigma_next / sigma) * D
 
         # Store for next step
-        self._state_by_shape[shape_key] = (denoised_sample.clone(), sigma.clone())
+        self._state_by_shape[shape_key] = (denoised_sample.detach().clone(), sigma.detach().clone())
 
         return x_next.to(sample.dtype)
 
@@ -221,6 +221,6 @@ class DPMPlusPlus2MSDEDiffusionStep(BaseDiffusionStep):
             x_next = x_next + noise * sigma_up * self.s_noise
 
         # Store history for this shape
-        self._state_by_shape[shape_key] = (denoised_sample.clone(), sigma.clone())
+        self._state_by_shape[shape_key] = (denoised_sample.detach().clone(), sigma.detach().clone())
 
         return x_next.to(sample.dtype)

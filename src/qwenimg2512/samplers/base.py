@@ -86,7 +86,10 @@ class BaseDiffusionStep(ABC):
         Returns:
             Velocity tensor
         """
-        return (sample - denoised_sample) / sigma.view(-1, 1, 1, 1) if sigma.ndim == 1 else (sample - denoised_sample) / sigma
+        if sigma.ndim == 1:
+            while sigma.ndim < sample.ndim:
+                sigma = sigma.unsqueeze(-1)
+        return (sample - denoised_sample) / sigma
 
     def get_denoised(
         self,
@@ -107,7 +110,10 @@ class BaseDiffusionStep(ABC):
         Returns:
             Denoised sample tensor
         """
-        return sample - velocity * sigma.view(-1, 1, 1, 1) if sigma.ndim == 1 else sample - velocity * sigma
+        if sigma.ndim == 1:
+            while sigma.ndim < sample.ndim:
+                sigma = sigma.unsqueeze(-1)
+        return sample - velocity * sigma
 
 
 def to_velocity(sample: torch.Tensor, sigma: float | torch.Tensor, denoised: torch.Tensor) -> torch.Tensor:
@@ -126,7 +132,10 @@ def to_velocity(sample: torch.Tensor, sigma: float | torch.Tensor, denoised: tor
     if isinstance(sigma, torch.Tensor):
         if sigma.ndim == 0:
             return (sample - denoised) / sigma
-        return (sample - denoised) / sigma.view(-1, 1, 1, 1)
+        if sigma.ndim == 1:
+            while sigma.ndim < sample.ndim:
+                sigma = sigma.unsqueeze(-1)
+        return (sample - denoised) / sigma
     return (sample - denoised) / sigma
 
 
@@ -144,5 +153,8 @@ def to_denoised(sample: torch.Tensor, velocity: torch.Tensor, sigma: float | tor
     if isinstance(sigma, torch.Tensor):
         if sigma.ndim == 0:
             return sample - velocity * sigma
-        return sample - velocity * sigma.view(-1, 1, 1, 1)
+        if sigma.ndim == 1:
+            while sigma.ndim < sample.ndim:
+                sigma = sigma.unsqueeze(-1)
+        return sample - velocity * sigma
     return sample - velocity * sigma

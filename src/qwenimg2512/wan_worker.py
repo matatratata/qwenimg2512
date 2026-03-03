@@ -184,18 +184,29 @@ class WanWorker(QThread):
 
         _free_gpu_memory()
 
-        output = pipe(
-            prompt=self._settings.prompt,
-            negative_prompt=self._settings.negative_prompt if self._settings.negative_prompt else None,
-            image=input_image,
-            num_frames=self._settings.frames,
-            height=height,
-            width=width,
-            num_inference_steps=self._settings.num_inference_steps,
-            guidance_scale=self._settings.guidance_scale,
-            generator=generator,
-            callback_on_step_end=step_callback,
-        )
+        from qwenimg2512.samplers import get_sampler
+        custom_sampler = None
+        if getattr(self._settings, "sampler_name", "euler") != "euler":
+            custom_sampler = get_sampler(self._settings.sampler_name)
+            if custom_sampler is None:
+                logger.warning("Sampler %s not found, falling back to default scheduler", self._settings.sampler_name)
+
+        from qwenimg2512.pipeline_patch import apply_custom_sampler, apply_custom_schedule
+
+        with apply_custom_sampler(pipe, custom_sampler):
+            with apply_custom_schedule(pipe, getattr(self._settings, "schedule_name", "default")):
+                output = pipe(
+                    prompt=self._settings.prompt,
+                    negative_prompt=self._settings.negative_prompt if self._settings.negative_prompt else None,
+                    image=input_image,
+                    num_frames=self._settings.frames,
+                    height=height,
+                    width=width,
+                    num_inference_steps=self._settings.num_inference_steps,
+                    guidance_scale=self._settings.guidance_scale,
+                    generator=generator,
+                    callback_on_step_end=step_callback,
+                )
 
         self._raise_if_cancelled()
         self.stage_changed.emit("Saving outputs...")

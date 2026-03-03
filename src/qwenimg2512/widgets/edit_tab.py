@@ -10,12 +10,14 @@ from PySide6.QtGui import QDragEnterEvent, QDropEvent, QImage, QPixmap
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
+    QDoubleSpinBox,
     QGroupBox,
     QHBoxLayout,
     QLabel,
     QMessageBox,
     QPushButton,
     QScrollArea,
+    QSpinBox,
     QVBoxLayout,
     QWidget,
 )
@@ -93,6 +95,21 @@ class ReferenceImageWidget(QGroupBox):
         self.fit_combo.currentIndexChanged.connect(self._update_preview)
         fit_row.addWidget(self.fit_combo, 1)
         layout.addLayout(fit_row)
+
+        # Conditioning strength
+        str_row = QHBoxLayout()
+        str_row.addWidget(QLabel("Strength:"))
+        self.strength_spin = QDoubleSpinBox()
+        self.strength_spin.setRange(0.00, 1.0)
+        self.strength_spin.setValue(1.0)
+        self.strength_spin.setSingleStep(0.01)
+        self.strength_spin.setDecimals(2)
+        self.strength_spin.setToolTip(
+            "How strongly this reference constrains generation.\n"
+            "1.0 = full (conservative)  |  0.5 = half  |  0.1 = minimal"
+        )
+        str_row.addWidget(self.strength_spin, 1)
+        layout.addLayout(str_row)
 
         # Buttons row
         btn_row = QHBoxLayout()
@@ -293,6 +310,7 @@ class EditTabWidget(QWidget):
             self.ref_widgets.append(w)
         content_layout.addWidget(ref_group)
 
+
         # 3. Settings (Resolution, Steps, etc.)
         self.settings_widget = ImageSettingsWidget()
         self.settings_widget.model_combo.setVisible(False)
@@ -317,6 +335,52 @@ class EditTabWidget(QWidget):
         self.lora_widget_2 = LoraSettingsWidget()
         self.lora_widget_2.setTitle("LoRA Adapter 2")
         content_layout.addWidget(self.lora_widget_2)
+
+        # 4c. Memory Optimization
+        mem_group = QGroupBox("Memory Optimization")
+        mem_layout = QHBoxLayout(mem_group)
+
+        mem_layout.addWidget(QLabel("FFN Chunk Size:"))
+        self.ffn_chunk_spin = QSpinBox()
+        self.ffn_chunk_spin.setRange(0, 16384)
+        self.ffn_chunk_spin.setSingleStep(512)
+        self.ffn_chunk_spin.setValue(0)
+        self.ffn_chunk_spin.setSpecialValueText("Disabled")
+        self.ffn_chunk_spin.setToolTip(
+            "Split FFN sequence into chunks to reduce peak VRAM.\n"
+            "0 = off.  Try 2048 for 2432×1408 resolutions.\n"
+            "Smaller = less VRAM, slightly slower."
+        )
+        mem_layout.addWidget(self.ffn_chunk_spin)
+
+        mem_layout.addWidget(QLabel("Blocks to CPU:"))
+        self.blocks_swap_spin = QSpinBox()
+        self.blocks_swap_spin.setRange(0, 60)
+        self.blocks_swap_spin.setSingleStep(1)
+        self.blocks_swap_spin.setValue(0)
+        self.blocks_swap_spin.setSpecialValueText("Disabled")
+        self.blocks_swap_spin.setToolTip(
+            "Move last N transformer blocks to CPU between forward passes.\n"
+            "0 = off.  Saves ~400 MB per block, but adds transfer overhead.\n"
+            "Try 5–15 if FFN chunking alone isn't enough."
+        )
+        mem_layout.addWidget(self.blocks_swap_spin)
+
+        mem_layout.addWidget(QLabel("Attn Chunk:"))
+        self.attn_chunk_spin = QSpinBox()
+        self.attn_chunk_spin.setRange(0, 16384)
+        self.attn_chunk_spin.setSingleStep(1024)
+        self.attn_chunk_spin.setValue(0)
+        self.attn_chunk_spin.setSpecialValueText("Disabled")
+        self.attn_chunk_spin.setToolTip(
+            "Chunk image token QKV projections + norms to reduce peak VRAM in attention.\n"
+            "Fixes the norm_k OOM at large resolutions (e.g. 2432×1408).\n"
+            "0 = off.  Try 4096 as a starting point.\n"
+            "Smaller = less peak VRAM (but more kernel launches, slightly slower)."
+        )
+        mem_layout.addWidget(self.attn_chunk_spin)
+        mem_layout.addStretch()
+        content_layout.addWidget(mem_group)
 
         # 5. Generation Controls
         self.gen_controls = GenerationControlsWidget()
@@ -382,6 +446,27 @@ class EditTabWidget(QWidget):
 
     def get_telestyle(self) -> bool:
         return self.telestyle_check.isChecked()
+
+    def get_ref_strengths(self) -> list[float]:
+        return [w.strength_spin.value() for w in self.ref_widgets]
+
+    def set_ref_strengths(self, values: list[float]) -> None:
+        for i, val in enumerate(values):
+            if i < len(self.ref_widgets):
+                self.ref_widgets[i].strength_spin.setValue(val)
+
+    def get_memory_settings(self) -> tuple[int, int, int]:
+        """Return (ffn_chunk_size, blocks_to_swap, attn_chunk_size)."""
+        return (
+            self.ffn_chunk_spin.value(),
+            self.blocks_swap_spin.value(),
+            self.attn_chunk_spin.value(),
+        )
+
+    def set_memory_settings(self, ffn_chunk_size: int, blocks_to_swap: int, attn_chunk_size: int = 0) -> None:
+        self.ffn_chunk_spin.setValue(ffn_chunk_size)
+        self.blocks_swap_spin.setValue(blocks_to_swap)
+        self.attn_chunk_spin.setValue(attn_chunk_size)
 
     def _on_telestyle_toggled(self, enabled: bool) -> None:
         """When TeleStyle is on, hide LoRA widgets and set fast defaults."""

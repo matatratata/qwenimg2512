@@ -197,6 +197,7 @@ class MainWindow(QMainWindow):
         if idx >= 0:
             self.settings_widget.model_combo.setCurrentIndex(idx)
         self.settings_widget.sampler_combo.setCurrentText(gs.sampler_name)
+        self.settings_widget.schedule_combo.setCurrentText(gs.schedule_name)
 
         # img2img settings
         self.image_input.set_strength(gs.img2img_strength)
@@ -233,6 +234,7 @@ class MainWindow(QMainWindow):
         if idx >= 0:
             self.edit_tab.settings_widget.ratio_combo.setCurrentIndex(idx)
         self.edit_tab.settings_widget.sampler_combo.setCurrentText(es.sampler_name)
+        self.edit_tab.settings_widget.schedule_combo.setCurrentText(es.schedule_name)
 
         self.edit_tab.set_reference_images([es.ref_image_1, es.ref_image_2, es.ref_image_3])
         self.edit_tab.set_fit_modes([es.ref_fit_mode_1, es.ref_fit_mode_2, es.ref_fit_mode_3])
@@ -241,8 +243,10 @@ class MainWindow(QMainWindow):
         self.edit_tab.lora_widget.set_scale_start(es.lora_scale_start)
         self.edit_tab.lora_widget.set_scale_end(es.lora_scale_end)
         self.edit_tab.lora_widget.set_step_start(es.lora_step_start)
-        self.edit_tab.lora_widget.set_step_start(es.lora_step_start)
         self.edit_tab.lora_widget.set_step_end(es.lora_step_end)
+        self.edit_tab.set_ref_strengths([es.ref_strength_1, es.ref_strength_2, es.ref_strength_3])
+        self.edit_tab.set_memory_settings(es.ffn_chunk_size, es.blocks_to_swap, es.attn_chunk_size)
+
 
         # Edit 2509 settings
         es2 = self._config.edit_2509
@@ -258,6 +262,7 @@ class MainWindow(QMainWindow):
         if idx >= 0:
             self.edit_2509_tab.settings_widget.ratio_combo.setCurrentIndex(idx)
         self.edit_2509_tab.settings_widget.sampler_combo.setCurrentText(es2.sampler_name)
+        self.edit_2509_tab.settings_widget.schedule_combo.setCurrentText(es2.schedule_name)
 
         self.edit_2509_tab.set_reference_images([es2.ref_image_1, es2.ref_image_2, es2.ref_image_3])
         self.edit_2509_tab.set_fit_modes([es2.ref_fit_mode_1, es2.ref_fit_mode_2, es2.ref_fit_mode_3])
@@ -303,6 +308,14 @@ class MainWindow(QMainWindow):
         self.wan_tab.steps_spin.setValue(ws.num_inference_steps)
         self.wan_tab.guidance_spin.setValue(ws.guidance_scale)
         self.wan_tab.shift_spin.setValue(ws.shift)
+        
+        idx = self.wan_tab.sampler_combo.findText(ws.sampler_name)
+        if idx >= 0:
+            self.wan_tab.sampler_combo.setCurrentIndex(idx)
+        idx = self.wan_tab.schedule_combo.findText(ws.schedule_name)
+        if idx >= 0:
+            self.wan_tab.schedule_combo.setCurrentIndex(idx)
+            
         self.wan_tab.extract_still_check.setChecked(ws.extract_still)
         self.wan_tab.gen_controls.seed_spin.setValue(ws.seed)
         self.wan_tab.gen_controls.set_output_dir(ws.output_dir)
@@ -313,6 +326,7 @@ class MainWindow(QMainWindow):
         gs.negative_prompt = self.prompt_widget.get_negative_prompt()
         gs.aspect_ratio = self.settings_widget.get_aspect_ratio()
         gs.sampler_name = self.settings_widget.get_sampler_name()
+        gs.schedule_name = self.settings_widget.get_schedule_name()
         gs.num_inference_steps = self.settings_widget.get_steps()
         gs.true_cfg_scale = self.settings_widget.get_cfg_scale()
         gs.guidance_scale = self.settings_widget.get_guidance_scale()
@@ -340,6 +354,7 @@ class MainWindow(QMainWindow):
         es.negative_prompt = self.edit_tab.prompt_widget.get_negative_prompt()
         es.aspect_ratio = self.edit_tab.settings_widget.get_aspect_ratio()
         es.sampler_name = self.edit_tab.settings_widget.get_sampler_name()
+        es.schedule_name = self.edit_tab.settings_widget.get_schedule_name()
         es.num_inference_steps = self.edit_tab.settings_widget.get_steps()
         es.true_cfg_scale = self.edit_tab.settings_widget.get_cfg_scale()
         es.guidance_scale = self.edit_tab.settings_widget.get_guidance_scale()
@@ -361,6 +376,12 @@ class MainWindow(QMainWindow):
         es.lora_scale_end = self.edit_tab.lora_widget.get_scale_end()
         es.lora_step_start = self.edit_tab.lora_widget.get_step_start()
         es.lora_step_end = self.edit_tab.lora_widget.get_step_end()
+        strengths = self.edit_tab.get_ref_strengths()
+        es.ref_strength_1 = strengths[0] if len(strengths) > 0 else 1.0
+        es.ref_strength_2 = strengths[1] if len(strengths) > 1 else 1.0
+        es.ref_strength_3 = strengths[2] if len(strengths) > 2 else 1.0
+        es.ffn_chunk_size, es.blocks_to_swap, es.attn_chunk_size = self.edit_tab.get_memory_settings()
+
 
         # Edit 2509 settings
         es2 = self._config.edit_2509
@@ -368,6 +389,7 @@ class MainWindow(QMainWindow):
         es2.negative_prompt = self.edit_2509_tab.prompt_widget.get_negative_prompt()
         es2.aspect_ratio = self.edit_2509_tab.settings_widget.get_aspect_ratio()
         es2.sampler_name = self.edit_2509_tab.settings_widget.get_sampler_name()
+        es2.schedule_name = self.edit_2509_tab.settings_widget.get_schedule_name()
         es2.num_inference_steps = self.edit_2509_tab.settings_widget.get_steps()
         es2.true_cfg_scale = self.edit_2509_tab.settings_widget.get_cfg_scale()
         es2.guidance_scale = self.edit_2509_tab.settings_widget.get_guidance_scale()
@@ -421,6 +443,8 @@ class MainWindow(QMainWindow):
         ws.num_inference_steps = self.wan_tab.steps_spin.value()
         ws.guidance_scale = self.wan_tab.guidance_spin.value()
         ws.shift = self.wan_tab.shift_spin.value()
+        ws.sampler_name = self.wan_tab.sampler_combo.currentText()
+        ws.schedule_name = self.wan_tab.schedule_combo.currentText()
         ws.extract_still = self.wan_tab.extract_still_check.isChecked()
         ws.seed = self.wan_tab.gen_controls.get_seed()
         ws.output_dir = self.wan_tab.gen_controls.get_output_dir()
@@ -480,7 +504,13 @@ class MainWindow(QMainWindow):
     def _on_edit_finished(self, output_path: str) -> None:
         self.edit_tab.set_generating(False)
         self.edit_tab.set_finished(output_path)
-        self.preview_widget.set_image(output_path)
+        
+        refs = self.edit_tab.get_reference_images()
+        modes = self.edit_tab.get_fit_modes()
+        ref1 = refs[0] if len(refs) > 0 and refs[0] else None
+        mode1 = modes[0] if len(modes) > 0 else "cover"
+        
+        self.preview_widget.set_image(output_path, comparison_path=ref1, fit_mode=mode1)
         self.statusBar().showMessage(f"Image saved: {output_path}")
 
     def _on_edit_error(self, error: str) -> None:
@@ -535,7 +565,13 @@ class MainWindow(QMainWindow):
     def _on_edit_2509_finished(self, output_path: str) -> None:
         self.edit_2509_tab.set_generating(False)
         self.edit_2509_tab.set_finished(output_path)
-        self.preview_widget.set_image(output_path)
+        
+        refs = self.edit_2509_tab.get_reference_images()
+        modes = self.edit_2509_tab.get_fit_modes()
+        ref1 = refs[0] if len(refs) > 0 and refs[0] else None
+        mode1 = modes[0] if len(modes) > 0 else "cover"
+        
+        self.preview_widget.set_image(output_path, comparison_path=ref1, fit_mode=mode1)
         self.statusBar().showMessage(f"Image saved: {output_path}")
 
     def _on_edit_2509_error(self, error: str) -> None:

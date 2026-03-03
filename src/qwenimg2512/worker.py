@@ -395,9 +395,10 @@ class GenerationWorker(QThread):
         self._emit_vram()
 
         logger.info("Starting pipeline.__call__ ...")
-        from qwenimg2512.pipeline_patch import apply_custom_sampler
+        from qwenimg2512.pipeline_patch import apply_custom_sampler, apply_custom_schedule
         with apply_custom_sampler(self._pipe, custom_sampler):
-            output = self._pipe(**gen_kwargs)
+            with apply_custom_schedule(self._pipe, self._settings.schedule_name):
+                output = self._pipe(**gen_kwargs)
         _log_gpu_memory("inference done")
 
         self._raise_if_cancelled()

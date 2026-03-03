@@ -86,7 +86,7 @@ class GEEulerDiffusionStep(BaseDiffusionStep):
             total_velocity = current_velocity
 
         # Store uncorrected velocity for next step's gradient
-        self._prev_velocity_by_shape[shape_key] = current_velocity.clone()
+        self._prev_velocity_by_shape[shape_key] = current_velocity.detach().clone()
 
         # Take step using the extrapolated velocity (Euler update)
         result = sample.to(torch.float32) + total_velocity.to(torch.float32) * dt

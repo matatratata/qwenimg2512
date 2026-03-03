@@ -18,6 +18,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from qwenimg2512.widgets.image_comparison import ImageComparisonWidget
+from qwenimg2512.resize_utils import resize_with_fit_mode
+
 
 def _pil_to_pixmap(pil_image: Image.Image) -> QPixmap:
     """Convert a PIL RGB image to QPixmap."""
@@ -38,12 +41,8 @@ class ImagePreviewWidget(QGroupBox):
     def _setup_ui(self) -> None:
         layout = QVBoxLayout(self)
 
-        self.image_label = QLabel("No image generated yet")
-        self.image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.image_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        self.image_label.setMinimumSize(400, 400)
-        self.image_label.setStyleSheet("border: 1px dashed #2a2a4a; border-radius: 8px;")
-        layout.addWidget(self.image_label)
+        self.viewer = ImageComparisonWidget()
+        layout.addWidget(self.viewer)
 
         self.info_label = QLabel("")
         self.info_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -66,16 +65,23 @@ class ImagePreviewWidget(QGroupBox):
         layout.addWidget(self.actions_widget)
         self.actions_widget.setVisible(False)
 
-    def set_image(self, path: str) -> None:
+    def set_image(self, path: str, comparison_path: str | None = None, fit_mode: str = "cover") -> None:
         """Show a generated output image (replaces any fit preview)."""
         self._mode = "generated"
         self._current_path = path
         self._pixmap = QPixmap(path)
         if self._pixmap.isNull():
-            self.image_label.setText(f"Failed to load: {path}")
+            self.viewer.clear()
+            self.info_label.setText(f"Failed to load: {path}")
             return
 
-        self._update_scaled_pixmap()
+        pixmap_overlay = None
+        if comparison_path and Path(comparison_path).is_file():
+            img_overlay = Image.open(comparison_path).convert("RGB")
+            resized_overlay = resize_with_fit_mode(img_overlay, self._pixmap.width(), self._pixmap.height(), fit_mode)
+            pixmap_overlay = _pil_to_pixmap(resized_overlay)
+
+        self.viewer.set_images(self._pixmap, pixmap_overlay)
 
         file_size = Path(path).stat().st_size
         size_str = f"{file_size / 1024:.0f} KB" if file_size < 1024 * 1024 else f"{file_size / (1024 * 1024):.1f} MB"
@@ -117,8 +123,7 @@ class ImagePreviewWidget(QGroupBox):
                 info_parts.append(f"{label}: {target_w}x{target_h}")
             info = " | ".join(info_parts)
 
-        self._pixmap = _pil_to_pixmap(composite)
-        self._update_scaled_pixmap()
+        self.viewer.set_images(self._pixmap, None)
         self.info_label.setText(info)
 
     def clear_fit_preview(self) -> None:
@@ -128,19 +133,13 @@ class ImagePreviewWidget(QGroupBox):
         self._mode = "empty"
         self._current_path = None
         self._pixmap = None
-        self.image_label.clear()
-        self.image_label.setText("No image generated yet")
+        self.viewer.clear()
         self.info_label.setText("")
         self.actions_widget.setVisible(False)
 
     def _update_scaled_pixmap(self) -> None:
-        if self._pixmap and not self._pixmap.isNull():
-            scaled = self._pixmap.scaled(
-                self.image_label.size(),
-                Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation,
-            )
-            self.image_label.setPixmap(scaled)
+        # Compatibility redirect for resizeEvent
+        self.viewer.update()
 
     def resizeEvent(self, event: object) -> None:
         super().resizeEvent(event)
@@ -150,7 +149,6 @@ class ImagePreviewWidget(QGroupBox):
         self._mode = "empty"
         self._current_path = None
         self._pixmap = None
-        self.image_label.clear()
-        self.image_label.setText("No image generated yet")
+        self.viewer.clear()
         self.info_label.setText("")
         self.actions_widget.setVisible(False)

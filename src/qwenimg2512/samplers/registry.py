@@ -106,11 +106,15 @@ def _register_builtin_samplers() -> None:
 
     # GE Euler (gradient estimation — free 2nd-order gains)
     register_sampler("ge_euler", GEEulerDiffusionStep)
+    # User-facing alias matching the request spec
+    register_sampler("euler ge", GEEulerDiffusionStep)
 
     # RES samplers (exponential integrators)
     register_sampler("res_2s", RES2SDiffusionStep)
     register_sampler("res_2m", RES2MDiffusionStep)
     register_sampler("res_3m", RES3MDiffusionStep)
+    # User-facing alias: "res" → RES 2M (the most practical/recommended RES variant)
+    register_sampler("res", RES2MDiffusionStep)
 
     # DPM++ samplers
     register_sampler("dpmpp_2m", DPMPlusPlus2MDiffusionStep)

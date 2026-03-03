@@ -271,7 +271,7 @@ class Edit2509Worker(QThread):
             "height": height,
             "num_inference_steps": self._settings.num_inference_steps,
             "true_cfg_scale": self._settings.true_cfg_scale,
-            "guidance_scale": self._settings.guidance_scale,
+            "guidance_scale": None,
             "generator": torch.Generator(device="cpu").manual_seed(seed),
             "callback_on_step_end": step_callback,
             "prompt_embeds": prompt_embeds.to(target_device),
@@ -289,9 +289,39 @@ class Edit2509Worker(QThread):
         self._emit_vram()
 
         logger.info("Starting pipeline.__call__ ...")
-        from qwenimg2512.pipeline_patch import apply_custom_sampler
-        with apply_custom_sampler(pipe, custom_sampler):
-            output = pipe(**gen_kwargs)
+        import diffusers.pipelines.qwenimage.pipeline_qwenimage_edit_plus as qwen_edit_module
+        original_vae_size = qwen_edit_module.VAE_IMAGE_SIZE
+        num_refs = len(ref_images)
+        
+        # BUG FIX: Set VAE_IMAGE_SIZE exactly to the output area.
+        # Qwen-Image uses absolute 2D RoPE embeddings. To align the reference image
+        # correctly with the output canvas without producing a "nested thumbnail", 
+        # the VAE_IMAGE_SIZE MUST match the output area exactly.
+        output_area = width * height
+        per_ref_area = output_area
+        # Round down to a multiple of 32² to stay compatible with calculate_dimensions
+        grid = 32 * 32
+        per_ref_area = (per_ref_area // grid) * grid
+        
+        if per_ref_area != original_vae_size:
+            qwen_edit_module.VAE_IMAGE_SIZE = per_ref_area
+            logger.info(
+                "Scaled VAE_IMAGE_SIZE: output=%dx%d refs=%d → per_ref_area=%d (~%dx%d)",
+                width, height, num_refs, per_ref_area,
+                int(per_ref_area ** 0.5), int(per_ref_area ** 0.5),
+            )
+
+        from qwenimg2512.pipeline_patch import apply_custom_sampler, apply_custom_schedule, apply_ffn_chunking, apply_block_swap, apply_attn_chunking
+        try:
+            with apply_ffn_chunking(pipe, self._settings.ffn_chunk_size):
+                with apply_block_swap(pipe, self._settings.blocks_to_swap):
+                    with apply_attn_chunking(pipe, getattr(self._settings, 'attn_chunk_size', 0)):
+                        with apply_custom_sampler(pipe, custom_sampler):
+                            with apply_custom_schedule(pipe, self._settings.schedule_name):
+                                output = pipe(**gen_kwargs)
+        finally:
+            qwen_edit_module.VAE_IMAGE_SIZE = original_vae_size
+            
         _log_gpu_memory("inference:done")
         self._raise_if_cancelled()
 

@@ -135,7 +135,7 @@ class RES2MDiffusionStep(BaseDiffusionStep):
         # Handle final step
         if sigma_next == 0:
             # Store history even on final step for consistency
-            self._state_by_shape[shape_key] = (denoised_sample.clone(), sigma.clone())
+            self._state_by_shape[shape_key] = (denoised_sample.detach().clone(), sigma.detach().clone())
             return denoised_sample
 
         # Get state for this shape
@@ -202,7 +202,7 @@ class RES2MDiffusionStep(BaseDiffusionStep):
                 result = (sample.to(torch.float32) + v_curr.to(torch.float32) * dt).to(sample.dtype)
 
         # Store history for this shape
-        self._state_by_shape[shape_key] = (denoised_sample.clone(), sigma.clone())
+        self._state_by_shape[shape_key] = (denoised_sample.detach().clone(), sigma.detach().clone())
 
         return result
 
@@ -251,7 +251,7 @@ class RES3MDiffusionStep(BaseDiffusionStep):
             # Store history even on final step
             if shape_key not in self._history_by_shape:
                 self._history_by_shape[shape_key] = []
-            self._history_by_shape[shape_key].append((denoised_sample.clone(), sigma.clone()))
+            self._history_by_shape[shape_key].append((denoised_sample.detach().clone(), sigma.detach().clone()))
             if len(self._history_by_shape[shape_key]) > 2:
                 self._history_by_shape[shape_key].pop(0)
             return denoised_sample
@@ -360,7 +360,7 @@ class RES3MDiffusionStep(BaseDiffusionStep):
         # Store history (keep last 2) for this shape
         if shape_key not in self._history_by_shape:
             self._history_by_shape[shape_key] = []
-        self._history_by_shape[shape_key].append((denoised_sample.clone(), sigma.clone()))
+        self._history_by_shape[shape_key].append((denoised_sample.detach().clone(), sigma.detach().clone()))
         if len(self._history_by_shape[shape_key]) > 2:
             self._history_by_shape[shape_key].pop(0)
 

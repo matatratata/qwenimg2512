@@ -14,6 +14,7 @@ CONFIG_DIR = Path.home() / ".config" / "qwenimg2512"
 CONFIG_FILE = CONFIG_DIR / "settings.json"
 
 ASPECT_RATIOS: dict[str, tuple[int, int]] = {
+    # Original
     "1:1 (1328x1328)": (1328, 1328),
     "16:9 (1664x928)": (1664, 928),
     "9:16 (928x1664)": (928, 1664),
@@ -21,6 +22,32 @@ ASPECT_RATIOS: dict[str, tuple[int, int]] = {
     "3:4 (1104x1472)": (1104, 1472),
     "3:2 (1584x1056)": (1584, 1056),
     "2:3 (1056x1584)": (1056, 1584),
+    
+    # Original Half
+    "1:1 Half (664x664)": (664, 664),
+    "16:9 Half (832x464)": (832, 464),
+    "9:16 Half (464x832)": (464, 832),
+    "4:3 Half (736x552)": (736, 552),
+    "3:4 Half (552x736)": (552, 736),
+    "3:2 Half (792x528)": (792, 528),
+    "2:3 Half (528x792)": (528, 792),
+
+    # Square standard
+    "1:1 Square (1024x1024)": (1024, 1024),
+    "1:1 Square Half (512x512)": (512, 512),
+
+    # Wan cinematic resolutions
+    "16:9 Wan (1280x720)": (1280, 720),
+    "9:16 Wan (720x1280)": (720, 1280),
+    "16:9 Wan Low (832x480)": (832, 480),
+    "9:16 Wan Low (480x832)": (480, 832),
+    
+    # LTX-2 resolutions
+    "LTX-2 (1216x704)": (1216, 704),
+    "LTX-2 Double (2432x1408)": (2432, 1408),
+    "LTX-2 Half (608x352)": (608, 352),
+    "LTX-2 Portrait (704x1216)": (704, 1216),
+    "LTX-2 Portrait Half (352x608)": (352, 608),
 }
 
 DEFAULT_NEGATIVE_PROMPT = (
@@ -66,6 +93,7 @@ class ModelPaths:
 class GenerationSettings:
     prompt: str = ""
     sampler_name: str = "euler"
+    schedule_name: str = "default"
     negative_prompt: str = DEFAULT_NEGATIVE_PROMPT
     aspect_ratio: str = "1:1 (1328x1328)"
     num_inference_steps: int = 50
@@ -94,6 +122,7 @@ class GenerationSettings:
 class EditSettings:
     prompt: str = ""
     sampler_name: str = "euler"
+    schedule_name: str = "default"
     negative_prompt: str = DEFAULT_NEGATIVE_PROMPT
     aspect_ratio: str = "1:1 (1328x1328)"
     num_inference_steps: int = 40
@@ -112,6 +141,12 @@ class EditSettings:
     lora_scale_end: float = 1.0
     lora_step_start: int = 0
     lora_step_end: int = -1
+    ref_strength_1: float = 1.0
+    ref_strength_2: float = 1.0
+    ref_strength_3: float = 1.0
+    ffn_chunk_size: int = 0    # 0 = disabled; try 2048 for large resolutions
+    blocks_to_swap: int = 0   # 0 = disabled; N = move last N blocks to CPU
+    attn_chunk_size: int = 0  # 0 = disabled; try 4096 for large resolutions
 
 
 @dataclass
@@ -119,6 +154,7 @@ class Edit2509Settings:
     use_telestyle: bool = False
     prompt: str = ""
     sampler_name: str = "euler"
+    schedule_name: str = "default"
     negative_prompt: str = DEFAULT_NEGATIVE_PROMPT
     aspect_ratio: str = "1:1 (1328x1328)"
     num_inference_steps: int = 40
@@ -169,6 +205,8 @@ class WanSettings:
     num_inference_steps: int = 40
     guidance_scale: float = 5.0
     shift: float = 5.0
+    sampler_name: str = "euler"
+    schedule_name: str = "default"
     seed: int = -1
     output_dir: str = str(Path.home() / "Pictures" / "qwenimg2512")
     extract_still: bool = True

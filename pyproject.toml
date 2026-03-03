@@ -26,6 +26,7 @@ dependencies = [
     "opencv-python",
     "gguf",
     "matplotlib",
+    "scipy",
     "imageio[ffmpeg]",
     "huggingface-hub",
 ]
