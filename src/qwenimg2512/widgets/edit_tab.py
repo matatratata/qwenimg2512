@@ -100,10 +100,10 @@ class ReferenceImageWidget(QGroupBox):
         str_row = QHBoxLayout()
         str_row.addWidget(QLabel("Strength:"))
         self.strength_spin = QDoubleSpinBox()
-        self.strength_spin.setRange(0.00, 1.0)
+        self.strength_spin.setRange(0.00, 2.0)
         self.strength_spin.setValue(1.0)
         self.strength_spin.setSingleStep(0.01)
-        self.strength_spin.setDecimals(2)
+        self.strength_spin.setDecimals(3)
         self.strength_spin.setToolTip(
             "How strongly this reference constrains generation.\n"
             "1.0 = full (conservative)  |  0.5 = half  |  0.1 = minimal"

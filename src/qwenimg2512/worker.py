@@ -416,7 +416,14 @@ class GenerationWorker(QThread):
             mode_tag = "img2img"
         else:
             mode_tag = "txt2img"
-        filename = f"qwen_{seed}_{width}x{height}_s{self._settings.num_inference_steps}_cfg{self._settings.true_cfg_scale}_{mode_tag}.png"
+
+        kind = f"gen_{mode_tag}"
+        cfg_str = f"cfg{self._settings.true_cfg_scale}"
+        g_str = f"g{self._settings.guidance_scale}"
+        samp_str = f"samp_{self._settings.sampler_name}"
+        sched_str = f"sched_{self._settings.schedule_name}"
+        
+        filename = f"{kind}_{cfg_str}_{g_str}_{samp_str}_{sched_str}_{seed}_{width}x{height}_s{self._settings.num_inference_steps}.png"
         output_path = output_dir / filename
 
         # Handle versioning

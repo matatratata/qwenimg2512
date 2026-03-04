@@ -212,7 +212,24 @@ class EditWorker(QThread):
         output_dir = Path(self._settings.output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
         
-        filename = f"qwen_edit_{seed}_{width}x{height}_s{self._settings.num_inference_steps}.png"
+        refs = [self._settings.ref_image_1, self._settings.ref_image_2, self._settings.ref_image_3]
+        strengths = [self._settings.ref_strength_1, self._settings.ref_strength_2, self._settings.ref_strength_3]
+        
+        ref_parts = []
+        for i, (r, s) in enumerate(zip(refs, strengths)):
+            if r and Path(r).is_file():
+                # Format to 2 decimal places, pad left with 0: e.g. 0.70 becomes '070', 1.0 becomes '100'
+                str_formatted = f"{int(s * 100):03d}"
+                ref_parts.append(f"r{i+1}{str_formatted}")
+        ref_str = "".join(ref_parts) if ref_parts else "noref"
+
+        kind = "edit2511"
+        cfg_str = f"cfg{self._settings.true_cfg_scale}"
+        g_str = f"g{self._settings.guidance_scale}"
+        samp_str = f"samp_{self._settings.sampler_name}"
+        sched_str = f"sched_{self._settings.schedule_name}"
+        
+        filename = f"{kind}_{ref_str}_{cfg_str}_{g_str}_{samp_str}_{sched_str}_{seed}_{width}x{height}_s{self._settings.num_inference_steps}.png"
         output_path = output_dir / filename
 
         counter = 1

@@ -37,8 +37,11 @@ from qwenimg2512.worker import (
 )
 from qwenimg2512.edit_worker import EditWorker
 from qwenimg2512.edit_2509_worker import Edit2509Worker
+import dataclasses
 from qwenimg2512.seedvr2_worker import SeedVR2Worker
 from qwenimg2512.wan_worker import WanWorker
+from qwenimg2512.history import HistoryManager
+from qwenimg2512.widgets.history_tab import HistoryTabWidget
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +50,7 @@ class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self._config = Config.load()
+        self.history_manager = HistoryManager(Path.home() / ".config" / "qwenimg2512" / "history.json")
         self._worker: GenerationWorker | None = None
         self._captioning_worker: CaptioningWorker | None = None
         self._caption_context: str = "input"  # "input" or "controlnet"
@@ -146,11 +150,23 @@ class MainWindow(QMainWindow):
         self.wan_tab.cancel_requested.connect(self._cancel_wan_generation)
         self.tabs.addTab(self.wan_tab, "Wan Cinematic")
 
+        # --- Tab 6: History ---
+        self.history_tab = HistoryTabWidget(self.history_manager)
+        self.tabs.addTab(self.history_tab, "History")
+
         # Right panel: preview
         self.preview_widget = ImagePreviewWidget()
         self.preview_widget.btn_send_wan.clicked.connect(self._quick_action_send_wan)
         self.preview_widget.btn_send_edit.clicked.connect(self._quick_action_send_edit)
         self.preview_widget.btn_send_seedvr2.clicked.connect(self._quick_action_send_seedvr2)
+        self.history_tab.image_selected.connect(
+            lambda out, ref1, fit: self.preview_widget.set_image(
+                out,
+                comparison_path=ref1 if ref1 else None,
+                fit_mode=fit,
+            )
+        )
+        self.history_tab.load_settings_requested.connect(self._on_history_load_settings)
 
         # Splitter
         splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -454,6 +470,17 @@ class MainWindow(QMainWindow):
         self._config.save()
         self.statusBar().showMessage("Settings saved")
 
+    def _add_to_history(self, tab_name: str, settings: object, output_path: str) -> None:
+        try:
+            if dataclasses.is_dataclass(settings):
+                params_dict = dataclasses.asdict(settings)
+            else:
+                params_dict = dict(settings)
+            self.history_manager.add_entry(tab_name, output_path, params_dict)
+            self.history_tab.refresh()
+        except Exception as e:
+            logger.error(f"Failed to add to history: {e}")
+
     def _is_busy(self) -> bool:
         gen_running = self._worker and self._worker.isRunning()
         try:
@@ -512,6 +539,7 @@ class MainWindow(QMainWindow):
         
         self.preview_widget.set_image(output_path, comparison_path=ref1, fit_mode=mode1)
         self.statusBar().showMessage(f"Image saved: {output_path}")
+        self._add_to_history("Edit (2511)", self._config.edit, output_path)
 
     def _on_edit_error(self, error: str) -> None:
         self.edit_tab.set_generating(False)
@@ -573,6 +601,7 @@ class MainWindow(QMainWindow):
         
         self.preview_widget.set_image(output_path, comparison_path=ref1, fit_mode=mode1)
         self.statusBar().showMessage(f"Image saved: {output_path}")
+        self._add_to_history("Edit (2509)", self._config.edit_2509, output_path)
 
     def _on_edit_2509_error(self, error: str) -> None:
         self.edit_2509_tab.set_generating(False)
@@ -626,6 +655,7 @@ class MainWindow(QMainWindow):
         self.seedvr2_tab.set_finished(output_path)
         self.preview_widget.set_image(output_path)
         self.statusBar().showMessage(f"Image saved: {output_path}")
+        self._add_to_history("SeedVR2", self._config.seedvr2, output_path)
 
     def _on_seedvr2_error(self, error: str) -> None:
         self.seedvr2_tab.set_generating(False)
@@ -674,6 +704,7 @@ class MainWindow(QMainWindow):
             self.preview_widget.clear()
             self.preview_widget.info_label.setText(f"Video saved to: {output_path}")
         self.statusBar().showMessage(f"Wan output saved: {output_path}")
+        self._add_to_history("Wan Cinematic", self._config.wan, output_path)
 
     def _on_wan_error(self, error: str) -> None:
         self.wan_tab.set_generating(False)
@@ -706,6 +737,54 @@ class MainWindow(QMainWindow):
                 if self.tabs.tabText(i) == "SeedVR2":
                     self.tabs.setCurrentIndex(i)
                     break
+
+    def _on_history_load_settings(self, tab_name: str, params: dict) -> None:
+        """Load settings from a history entry into the respective tab."""
+        if tab_name == "Generate":
+            for k, v in params.items():
+                if hasattr(self._config.generation, k):
+                    setattr(self._config.generation, k, v)
+            # Switch to tab
+            for i in range(self.tabs.count()):
+                if self.tabs.tabText(i) == "Generate":
+                    self.tabs.setCurrentIndex(i)
+                    break
+        elif tab_name == "Edit (2511)":
+            for k, v in params.items():
+                if hasattr(self._config.edit, k):
+                    setattr(self._config.edit, k, v)
+            for i in range(self.tabs.count()):
+                if self.tabs.tabText(i) == "Edit (2511)":
+                    self.tabs.setCurrentIndex(i)
+                    break
+        elif tab_name == "Edit (2509)":
+            for k, v in params.items():
+                if hasattr(self._config.edit_2509, k):
+                    setattr(self._config.edit_2509, k, v)
+            for i in range(self.tabs.count()):
+                if self.tabs.tabText(i) == "Edit (2509)":
+                    self.tabs.setCurrentIndex(i)
+                    break
+        elif tab_name == "Wan Cinematic":
+            for k, v in params.items():
+                if hasattr(self._config.wan, k):
+                    setattr(self._config.wan, k, v)
+            for i in range(self.tabs.count()):
+                if self.tabs.tabText(i) == "Wan Cinematic":
+                    self.tabs.setCurrentIndex(i)
+                    break
+        elif tab_name == "SeedVR2":
+            for k, v in params.items():
+                if hasattr(self._config.seedvr2, k):
+                    setattr(self._config.seedvr2, k, v)
+            for i in range(self.tabs.count()):
+                if self.tabs.tabText(i) == "SeedVR2":
+                    self.tabs.setCurrentIndex(i)
+                    break
+        
+        # Now that config is overridden, trigger UI update
+        self._load_settings()
+        self.statusBar().showMessage(f"Loaded {tab_name} settings from history")
 
     def _start_generation(self) -> None:
         prompt = self.prompt_widget.get_prompt()
@@ -751,6 +830,7 @@ class MainWindow(QMainWindow):
         self.gen_controls.set_finished(output_path)
         self.preview_widget.set_image(output_path)
         self.statusBar().showMessage(f"Image saved: {output_path}")
+        self._add_to_history("Generate (2512)", self._config.generation, output_path)
 
     def _on_error(self, error: str) -> None:
         self.gen_controls.set_generating(False)

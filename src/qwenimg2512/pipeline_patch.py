@@ -399,13 +399,55 @@ def apply_ffn_chunking(pipe: Any, chunk_size: int):
                 txt_mod1, txt_mod2 = txt_mod_params.chunk(2, dim=-1)
 
                 # ---- norm-1 + attention ---------------------------------
-                img_normed = b.img_norm1(hidden_states)
-                img_modulated, img_gate1 = b._modulate(img_normed, img_mod1, modulate_index)
-                del img_normed  # Free memory ASAP
+                seq_img = hidden_states.shape[1]
+                eff_chunk = chunk_size if chunk_size > 0 else seq_img
+                eff_chunk = min(eff_chunk, seq_img)
 
-                txt_normed = b.txt_norm1(encoder_hidden_states)
-                txt_modulated, txt_gate1 = b._modulate(txt_normed, txt_mod1)
-                del txt_normed  # Free memory ASAP
+                img_modulated = torch.empty_like(hidden_states)
+                
+                # Pre-allocate img_gate1 using the structure of hidden_states.
+                # _modulate returns gate components with same sequence dimension.
+                # Note: b._modulate returns gate_result, we define its shape dynamically.
+                img_gate1 = None
+
+                for start in range(0, seq_img, eff_chunk):
+                    end = min(start + eff_chunk, seq_img)
+                    hs_c = hidden_states[:, start:end, :]
+                    norm1_c = b.img_norm1(hs_c)
+                    
+                    mod_idx_c = modulate_index[:, start:end] if modulate_index is not None else None
+                    mod1_c, gate1_c = b._modulate(norm1_c, img_mod1, mod_idx_c)
+                    
+                    img_modulated[:, start:end, :] = mod1_c
+                    if img_gate1 is None:
+                        # Allocate full sequence gate tensor matching chunk's dtype & non-seq dims
+                        gate_shape = list(gate1_c.shape)
+                        gate_shape[1] = seq_img
+                        img_gate1 = torch.empty(gate_shape, dtype=gate1_c.dtype, device=gate1_c.device)
+                    
+                    img_gate1[:, start:end] = gate1_c
+                    del norm1_c, mod1_c, gate1_c
+
+                seq_txt = encoder_hidden_states.shape[1]
+                eff_chunk_txt = chunk_size if chunk_size > 0 else seq_txt
+                eff_chunk_txt = min(eff_chunk_txt, seq_txt)
+
+                txt_modulated = torch.empty_like(encoder_hidden_states)
+                txt_gate1 = None
+                for start in range(0, seq_txt, eff_chunk_txt):
+                    end = min(start + eff_chunk_txt, seq_txt)
+                    tx_c = encoder_hidden_states[:, start:end, :]
+                    t_norm1_c = b.txt_norm1(tx_c)
+                    t_mod1_c, t_gate1_c = b._modulate(t_norm1_c, txt_mod1)
+                    txt_modulated[:, start:end, :] = t_mod1_c
+                    
+                    if txt_gate1 is None:
+                        gate_shape = list(t_gate1_c.shape)
+                        gate_shape[1] = seq_txt
+                        txt_gate1 = torch.empty(gate_shape, dtype=t_gate1_c.dtype, device=t_gate1_c.device)
+                        
+                    txt_gate1[:, start:end] = t_gate1_c
+                    del t_norm1_c, t_mod1_c, t_gate1_c
 
                 jkw = joint_attention_kwargs or {}
                 attn_output = b.attn(
@@ -426,25 +468,40 @@ def apply_ffn_chunking(pipe: Any, chunk_size: int):
                 del txt_gate1, txt_attn_output  # Free memory ASAP
 
                 # ---- norm-2 + CHUNKED FFN -------------------------------
-                img_normed2 = b.img_norm2(hidden_states)
-                img_modulated2, img_gate2 = b._modulate(img_normed2, img_mod2, modulate_index)
-                del img_normed2  # Free memory ASAP
+                new_hidden_states = torch.empty_like(hidden_states)
+                for start in range(0, seq_img, eff_chunk):
+                    end = min(start + eff_chunk, seq_img)
+                    hs_c = hidden_states[:, start:end, :]
+                    
+                    norm2_c = b.img_norm2(hs_c)
+                    mod_idx_c = modulate_index[:, start:end] if modulate_index is not None else None
+                    mod2_c, gate2_c = b._modulate(norm2_c, img_mod2, mod_idx_c)
+                    del norm2_c
+                    
+                    mlp_c = b.img_mlp(mod2_c)
+                    del mod2_c
+                    
+                    new_hidden_states[:, start:end, :] = hs_c + gate2_c * mlp_c
+                    del mlp_c, gate2_c
+                hidden_states = new_hidden_states
+                del new_hidden_states
 
-                img_mlp_output = _chunked_ff_forward(b.img_mlp, img_modulated2, chunk_size)
-                del img_modulated2  # Free memory ASAP
-
-                hidden_states = hidden_states + img_gate2 * img_mlp_output
-                del img_gate2, img_mlp_output  # Free memory ASAP
-
-                txt_normed2 = b.txt_norm2(encoder_hidden_states)
-                txt_modulated2, txt_gate2 = b._modulate(txt_normed2, txt_mod2)
-                del txt_normed2
-
-                txt_mlp_output = _chunked_ff_forward(b.txt_mlp, txt_modulated2, chunk_size)
-                del txt_modulated2
-
-                encoder_hidden_states = encoder_hidden_states + txt_gate2 * txt_mlp_output
-                del txt_gate2, txt_mlp_output
+                new_encoder_hidden_states = torch.empty_like(encoder_hidden_states)
+                for start in range(0, seq_txt, eff_chunk_txt):
+                    end = min(start + eff_chunk_txt, seq_txt)
+                    tx_c = encoder_hidden_states[:, start:end, :]
+                    
+                    t_norm2_c = b.txt_norm2(tx_c)
+                    t_mod2_c, t_gate2_c = b._modulate(t_norm2_c, txt_mod2)
+                    del t_norm2_c
+                    
+                    t_mlp_c = b.txt_mlp(t_mod2_c)
+                    del t_mod2_c
+                    
+                    new_encoder_hidden_states[:, start:end, :] = tx_c + t_gate2_c * t_mlp_c
+                    del t_mlp_c, t_gate2_c
+                encoder_hidden_states = new_encoder_hidden_states
+                del new_encoder_hidden_states
 
                 # ---- dtype clipping (matches original) ------------------
                 if encoder_hidden_states.dtype == torch.float16:
@@ -537,25 +594,43 @@ def _chunked_attn_call(
     eff_chunk = chunk_size if chunk_size > 0 else seq_img
     eff_chunk = min(eff_chunk, seq_img)
 
-    img_q_chunks, img_k_chunks, img_v_chunks = [], [], []
+    # Pre-allocate joint tensors to avoid doubling memory during torch.cat
+    B, _, heads, head_dim = txt_query.shape
+    dtype = txt_query.dtype
+    device = txt_query.device
+
+    joint_query = torch.empty((B, seq_txt + seq_img, heads, head_dim), dtype=dtype, device=device)
+    joint_key   = torch.empty((B, seq_txt + seq_img, heads, head_dim), dtype=dtype, device=device)
+    joint_value = torch.empty((B, seq_txt + seq_img, heads, head_dim), dtype=dtype, device=device)
+
+    # Insert text parts and free original tensors immediately
+    joint_query[:, :seq_txt] = txt_query
+    joint_key[:, :seq_txt]   = txt_key
+    joint_value[:, :seq_txt] = txt_value
+    del txt_query, txt_key, txt_value
 
     for start in range(0, seq_img, eff_chunk):
         end = min(start + eff_chunk, seq_img)
         hs_chunk = hidden_states[:, start:end, :]
 
-        q_c = attn.to_q(hs_chunk).unflatten(-1, (attn.heads, -1))
-        k_c = attn.to_k(hs_chunk).unflatten(-1, (attn.heads, -1))
+        # Value chunk
         v_c = attn.to_v(hs_chunk).unflatten(-1, (attn.heads, -1))
+        joint_value[:, seq_txt + start : seq_txt + end] = v_c
+        del v_c
 
+        # Query chunk
+        q_c = attn.to_q(hs_chunk).unflatten(-1, (attn.heads, -1))
         if attn.norm_q is not None:
             q_c = attn.norm_q(q_c)
+
+        # Key chunk
+        k_c = attn.to_k(hs_chunk).unflatten(-1, (attn.heads, -1))
         if attn.norm_k is not None:
             k_c = attn.norm_k(k_c)
 
+        # Apply RoPE
         if img_freqs is not None:
             from diffusers.models.transformers.transformer_qwenimage import apply_rotary_emb_qwen
-            # Safely slice frequencies along the sequence dimension regardless of whether 
-            # the tensor has a batch dimension (e.g. [S, D] vs [B, S, D]).
             if hasattr(img_freqs, "ndim") and img_freqs.ndim == 3:
                 freq_chunk = img_freqs[:, start:end, :]
             else:
@@ -563,20 +638,11 @@ def _chunked_attn_call(
             q_c = apply_rotary_emb_qwen(q_c, freq_chunk, use_real=False)
             k_c = apply_rotary_emb_qwen(k_c, freq_chunk, use_real=False)
 
-        img_q_chunks.append(q_c)
-        img_k_chunks.append(k_c)
-        img_v_chunks.append(v_c)
-
-    # Directly build joint sequences and free intermediate lists/tensors
-    # to avoid memory spikes
-    joint_query = torch.cat([txt_query] + img_q_chunks, dim=1)
-    del txt_query, img_q_chunks
-
-    joint_key   = torch.cat([txt_key] + img_k_chunks, dim=1)
-    del txt_key, img_k_chunks
-
-    joint_value = torch.cat([txt_value] + img_v_chunks, dim=1)
-    del txt_value, img_v_chunks
+        joint_query[:, seq_txt + start : seq_txt + end] = q_c
+        del q_c
+        
+        joint_key[:, seq_txt + start : seq_txt + end] = k_c
+        del k_c
 
 
     from diffusers.models.transformers.transformer_qwenimage import dispatch_attention_fn

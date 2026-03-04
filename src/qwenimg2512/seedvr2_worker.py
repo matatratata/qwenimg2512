@@ -68,10 +68,17 @@ class SeedVR2Worker(QThread):
         output_dir.mkdir(parents=True, exist_ok=True)
 
         input_stem = Path(input_path).stem
-        output_path = output_dir / f"{input_stem}_seedvr2_{self._settings.resolution}p.png"
+        kind = "seedvr2"
+        inoise = f"in{self._settings.input_noise_scale}"
+        lnoise = f"ln{self._settings.latent_noise_scale}"
+        cc = f"cc_{self._settings.color_correction}"
+        
+        base_name = f"{input_stem}_{kind}_{inoise}_{lnoise}_{cc}_{self._settings.seed}_{self._settings.resolution}p"
+        output_path = output_dir / f"{base_name}.png"
+        
         counter = 1
         while output_path.exists():
-            output_path = output_dir / f"{input_stem}_seedvr2_{self._settings.resolution}p_v{counter:03d}.png"
+            output_path = output_dir / f"{base_name}_v{counter:03d}.png"
             counter += 1
 
         self.stage_changed.emit("Starting SeedVR2 upscaling...")

@@ -216,7 +216,12 @@ class WanWorker(QThread):
 
         frames = output.frames[0]
 
-        base_name = f"wan_cinematic_{seed}_{width}x{height}_s{self._settings.num_inference_steps}"
+        kind = "wan"
+        g_str = f"g{self._settings.guidance_scale}"
+        samp_str = f"samp_{getattr(self._settings, 'sampler_name', 'euler')}"
+        sched_str = f"sched_{getattr(self._settings, 'schedule_name', 'default')}"
+        shift_str = f"shift{self._settings.shift}"
+        base_name = f"{kind}_{g_str}_{samp_str}_{sched_str}_{shift_str}_{seed}_{width}x{height}_s{self._settings.num_inference_steps}"
         vid_path = output_dir / f"{base_name}.mp4"
         counter = 1
         while vid_path.exists():
