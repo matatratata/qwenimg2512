@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QDoubleSpinBox,
     QGroupBox,
@@ -122,6 +123,29 @@ class ImageSettingsWidget(QGroupBox):
         guidance_row.addWidget(self.guidance_spin, 1)
         layout.addLayout(guidance_row)
 
+        # SMC-CFG Row
+        smc_row = QHBoxLayout()
+        self.smc_check = QCheckBox("SMC-CFG")
+        self.smc_check.setToolTip(
+            "Sliding Mode Control CFG (CFG-Ctrl CVPR 2026).\n"
+            "Stabilizes colors and stops mode collapse at high CFG scales."
+        )
+        self.smc_check.toggled.connect(lambda _: self.settings_changed.emit())
+        smc_row.addWidget(self.smc_check)
+
+        smc_row.addWidget(QLabel("Gain (k):"))
+        self.smc_spin = QDoubleSpinBox()
+        self.smc_spin.setRange(0.01, 1.0)
+        self.smc_spin.setValue(0.10)
+        self.smc_spin.setSingleStep(0.01)
+        self.smc_spin.setDecimals(2)
+        self.smc_spin.setToolTip("Switching control gain (0.05 - 0.20 recommended)")
+        self.smc_spin.valueChanged.connect(lambda _: self.settings_changed.emit())
+        self.smc_check.toggled.connect(self.smc_spin.setEnabled)
+        self.smc_spin.setEnabled(False)
+        smc_row.addWidget(self.smc_spin, 1)
+        layout.addLayout(smc_row)
+
         # Resolution preview
         self.resolution_label = QLabel()
         self.resolution_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -168,3 +192,10 @@ class ImageSettingsWidget(QGroupBox):
         effective = max(1, int(steps * strength))
         self.effective_steps_label.setText(f"⚠ Effective: {effective} steps (strength {strength:.2f})")
         self.effective_steps_label.setVisible(True)
+
+    def get_smc_settings(self) -> dict:
+        return {"enabled": self.smc_check.isChecked(), "k": self.smc_spin.value()}
+
+    def set_smc_settings(self, enabled: bool, k: float) -> None:
+        self.smc_check.setChecked(enabled)
+        self.smc_spin.setValue(k)

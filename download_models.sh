@@ -150,7 +150,12 @@ else
     echo "SeedVR2 CLI already present at $SEEDVR2_CLI_DIR"
 fi
 
-# 13. Wan 2.2 I2V GGUF
+# 13. Wan 2.2 I2V GGUF — dual-denoiser (both transformers required)
+download_file \
+    "bullerwins/Wan2.2-I2V-A14B-GGUF" \
+    "wan2.2_i2v_high_noise_14B_Q8_0.gguf" \
+    "$BASE_DIR/Wan2.2-I2V-A14B-GGUF"
+
 download_file \
     "bullerwins/Wan2.2-I2V-A14B-GGUF" \
     "wan2.2_i2v_low_noise_14B_Q8_0.gguf" \
@@ -161,5 +166,16 @@ download_repo \
     "Wan-AI/Wan2.2-I2V-A14B-Diffusers" \
     "$BASE_DIR/Wan2.2-I2V-A14B-Diffusers" \
     "text_encoder/*" "vae/*" "vision_encoder/*" "tokenizer/*" "scheduler/*" "model_index.json"
+
+# 15. Wan 2.2 I2V Diffusers - transformer configs (needed by from_single_file)
+download_file \
+    "Wan-AI/Wan2.2-I2V-A14B-Diffusers" \
+    "transformer/config.json" \
+    "$BASE_DIR/Wan2.2-I2V-A14B-Diffusers"
+
+download_file \
+    "Wan-AI/Wan2.2-I2V-A14B-Diffusers" \
+    "transformer_2/config.json" \
+    "$BASE_DIR/Wan2.2-I2V-A14B-Diffusers"
 
 echo "All downloads complete!"

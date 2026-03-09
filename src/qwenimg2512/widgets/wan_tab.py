@@ -58,7 +58,24 @@ class WanTabWidget(QWidget):
         res_row = QHBoxLayout()
         res_row.addWidget(QLabel("Resolution:"))
         self.res_combo = QComboBox()
-        self.res_combo.addItems(["832x480", "1280x720", "480x832", "720x1280"])
+        self.res_combo.addItems([
+            # 16:9
+            "832x480",
+            "1280x720",
+            # 9:16
+            "480x832",
+            "720x1280",
+            # 2:1 landscape
+            "960x480",
+            "1280x640",
+            "1664x832",
+            "1920x960",
+            # 1:2 portrait
+            "480x960",
+            "640x1280",
+            "832x1664",
+            "960x1920",
+        ])
         res_row.addWidget(self.res_combo, 1)
 
         res_row.addWidget(QLabel("Frames:"))
@@ -119,6 +136,27 @@ class WanTabWidget(QWidget):
         )
         settings_layout.addWidget(self.extract_still_check)
 
+        # SMC-CFG Row
+        smc_row = QHBoxLayout()
+        self.smc_check = QCheckBox("SMC-CFG")
+        self.smc_check.setToolTip(
+            "Sliding Mode Control CFG (CFG-Ctrl CVPR 2026).\n"
+            "Stabilizes colors and stops mode collapse at high CFG scales."
+        )
+        smc_row.addWidget(self.smc_check)
+
+        smc_row.addWidget(QLabel("Gain (k):"))
+        self.smc_spin = QDoubleSpinBox()
+        self.smc_spin.setRange(0.01, 1.0)
+        self.smc_spin.setValue(0.20)
+        self.smc_spin.setSingleStep(0.01)
+        self.smc_spin.setDecimals(2)
+        self.smc_spin.setToolTip("Switching control gain (0.05 - 0.20 recommended)")
+        self.smc_check.toggled.connect(self.smc_spin.setEnabled)
+        self.smc_spin.setEnabled(False)
+        smc_row.addWidget(self.smc_spin, 1)
+        settings_layout.addLayout(smc_row)
+
         content_layout.addWidget(settings_group)
 
         self.gen_controls = GenerationControlsWidget()
@@ -142,6 +180,8 @@ class WanTabWidget(QWidget):
         self.sampler_combo.setEnabled(not generating)
         self.schedule_combo.setEnabled(not generating)
         self.extract_still_check.setEnabled(not generating)
+        self.smc_check.setEnabled(not generating)
+        self.smc_spin.setEnabled(not generating and self.smc_check.isChecked())
 
     def set_progress(self, current: int, total: int, message: str) -> None:
         self.gen_controls.set_progress(current, total, message)

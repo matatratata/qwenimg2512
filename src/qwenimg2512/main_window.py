@@ -214,6 +214,7 @@ class MainWindow(QMainWindow):
             self.settings_widget.model_combo.setCurrentIndex(idx)
         self.settings_widget.sampler_combo.setCurrentText(gs.sampler_name)
         self.settings_widget.schedule_combo.setCurrentText(gs.schedule_name)
+        self.settings_widget.set_smc_settings(gs.smc_cfg_enabled, gs.smc_k)
 
         # img2img settings
         self.image_input.set_strength(gs.img2img_strength)
@@ -262,6 +263,7 @@ class MainWindow(QMainWindow):
         self.edit_tab.lora_widget.set_step_end(es.lora_step_end)
         self.edit_tab.set_ref_strengths([es.ref_strength_1, es.ref_strength_2, es.ref_strength_3])
         self.edit_tab.set_memory_settings(es.ffn_chunk_size, es.blocks_to_swap, es.attn_chunk_size)
+        self.edit_tab.settings_widget.set_smc_settings(es.smc_cfg_enabled, es.smc_k)
 
 
         # Edit 2509 settings
@@ -296,6 +298,7 @@ class MainWindow(QMainWindow):
         self.edit_2509_tab.lora_widget_2.set_scale_end(es2.lora_scale_end_2)
         self.edit_2509_tab.lora_widget_2.set_step_start(es2.lora_step_start_2)
         self.edit_2509_tab.lora_widget_2.set_step_end(es2.lora_step_end_2)
+        self.edit_2509_tab.settings_widget.set_smc_settings(es2.smc_cfg_enabled, es2.smc_k)
 
         # SeedVR2 settings
         sv = self._config.seedvr2
@@ -335,6 +338,8 @@ class MainWindow(QMainWindow):
         self.wan_tab.extract_still_check.setChecked(ws.extract_still)
         self.wan_tab.gen_controls.seed_spin.setValue(ws.seed)
         self.wan_tab.gen_controls.set_output_dir(ws.output_dir)
+        self.wan_tab.smc_check.setChecked(ws.smc_cfg_enabled)
+        self.wan_tab.smc_spin.setValue(ws.smc_k)
 
     def _collect_settings(self) -> None:
         gs = self._config.generation
@@ -363,6 +368,8 @@ class MainWindow(QMainWindow):
         gs.controlnet_conditioning_scale = self.controlnet_widget.get_conditioning_scale()
         gs.control_guidance_start = self.controlnet_widget.get_guidance_start()
         gs.control_guidance_end = self.controlnet_widget.get_guidance_end()
+        smc_g = self.settings_widget.get_smc_settings()
+        gs.smc_cfg_enabled, gs.smc_k = smc_g["enabled"], smc_g["k"]
 
         # Edit settings
         es = self._config.edit
@@ -397,6 +404,8 @@ class MainWindow(QMainWindow):
         es.ref_strength_2 = strengths[1] if len(strengths) > 1 else 1.0
         es.ref_strength_3 = strengths[2] if len(strengths) > 2 else 1.0
         es.ffn_chunk_size, es.blocks_to_swap, es.attn_chunk_size = self.edit_tab.get_memory_settings()
+        smc_e = self.edit_tab.settings_widget.get_smc_settings()
+        es.smc_cfg_enabled, es.smc_k = smc_e["enabled"], smc_e["k"]
 
 
         # Edit 2509 settings
@@ -435,6 +444,8 @@ class MainWindow(QMainWindow):
         es2.lora_scale_end_2 = self.edit_2509_tab.lora_widget_2.get_scale_end()
         es2.lora_step_start_2 = self.edit_2509_tab.lora_widget_2.get_step_start()
         es2.lora_step_end_2 = self.edit_2509_tab.lora_widget_2.get_step_end()
+        smc_e2 = self.edit_2509_tab.settings_widget.get_smc_settings()
+        es2.smc_cfg_enabled, es2.smc_k = smc_e2["enabled"], smc_e2["k"]
 
         # SeedVR2 settings
         sv = self._config.seedvr2
@@ -464,6 +475,8 @@ class MainWindow(QMainWindow):
         ws.extract_still = self.wan_tab.extract_still_check.isChecked()
         ws.seed = self.wan_tab.gen_controls.get_seed()
         ws.output_dir = self.wan_tab.gen_controls.get_output_dir()
+        ws.smc_cfg_enabled = self.wan_tab.smc_check.isChecked()
+        ws.smc_k = self.wan_tab.smc_spin.value()
 
     def _save_settings(self) -> None:
         self._collect_settings()

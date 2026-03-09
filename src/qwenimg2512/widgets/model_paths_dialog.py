@@ -47,7 +47,8 @@ class ModelPathsDialog(QDialog):
             "seedvr2_gguf": "SeedVR2 GGUF:",
             "seedvr2_vae": "SeedVR2 VAE:",
             "seedvr2_cli": "SeedVR2 CLI (inference_cli.py):",
-            "wan_gguf": "Wan 2.2 GGUF:",
+            "wan_gguf_high_noise": "Wan 2.2 High-Noise GGUF (transformer):",
+            "wan_gguf_low_noise": "Wan 2.2 Low-Noise GGUF (transformer_2):",
         }
 
         filters = {
@@ -64,7 +65,8 @@ class ModelPathsDialog(QDialog):
             "seedvr2_gguf": "GGUF Files (*.gguf)",
             "seedvr2_vae": "PyTorch Files (*.pth)",
             "seedvr2_cli": "Python Files (*.py)",
-            "wan_gguf": "GGUF Files (*.gguf)",
+            "wan_gguf_high_noise": "GGUF Files (*.gguf)",
+            "wan_gguf_low_noise": "GGUF Files (*.gguf)",
         }
 
         for field_name, label_text in labels.items():

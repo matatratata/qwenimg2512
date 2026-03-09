@@ -1,0 +1,13 @@
+__pycache__/**
+.venv/**
+*.pyc
+.pytest_cache/**
+.git/**
+.DS_Store
+node_modules/**
+.vscode/**
+.claude/**
+.idea/**
+.gitignore
+test_*
+

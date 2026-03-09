@@ -29,6 +29,7 @@ dependencies = [
     "scipy",
     "imageio[ffmpeg]",
     "huggingface-hub",
+    "ftfy",
 ]
 
 [[tool.uv.index]]

@@ -181,9 +181,6 @@ class EditWorker(QThread):
         # the VAE_IMAGE_SIZE MUST match the output area exactly.
         output_area = width * height
         per_ref_area = output_area
-        # Round down to a multiple of 32² to stay compatible with calculate_dimensions
-        grid = 32 * 32
-        per_ref_area = (per_ref_area // grid) * grid
         
         if per_ref_area != original_vae_size:
             qwen_edit_module.VAE_IMAGE_SIZE = per_ref_area
@@ -193,14 +190,15 @@ class EditWorker(QThread):
                 int(per_ref_area ** 0.5), int(per_ref_area ** 0.5),
             )
 
-        from qwenimg2512.pipeline_patch import apply_custom_sampler, apply_custom_schedule, apply_ffn_chunking, apply_block_swap, apply_attn_chunking
+        from qwenimg2512.pipeline_patch import apply_custom_sampler, apply_custom_schedule, apply_ffn_chunking, apply_block_swap, apply_attn_chunking, apply_smc_cfg
         try:
-            with apply_ffn_chunking(self._pipe, self._settings.ffn_chunk_size):
-                with apply_block_swap(self._pipe, self._settings.blocks_to_swap):
-                    with apply_attn_chunking(self._pipe, self._settings.attn_chunk_size):
-                        with apply_custom_sampler(self._pipe, custom_sampler):
-                            with apply_custom_schedule(self._pipe, self._settings.schedule_name):
-                                output = self._pipe(**gen_kwargs)
+            with apply_smc_cfg(self._pipe, getattr(self._settings, "smc_cfg_enabled", False), getattr(self._settings, "smc_k", 0.2), getattr(self._settings, "smc_lambda", 5.0)):
+                with apply_ffn_chunking(self._pipe, self._settings.ffn_chunk_size):
+                    with apply_block_swap(self._pipe, self._settings.blocks_to_swap):
+                        with apply_attn_chunking(self._pipe, self._settings.attn_chunk_size):
+                            with apply_custom_sampler(self._pipe, custom_sampler):
+                                with apply_custom_schedule(self._pipe, self._settings.schedule_name):
+                                    output = self._pipe(**gen_kwargs)
         finally:
             qwen_edit_module.VAE_IMAGE_SIZE = original_vae_size
             # Restore original _encode_vae_image if we patched it

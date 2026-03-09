@@ -395,10 +395,11 @@ class GenerationWorker(QThread):
         self._emit_vram()
 
         logger.info("Starting pipeline.__call__ ...")
-        from qwenimg2512.pipeline_patch import apply_custom_sampler, apply_custom_schedule
-        with apply_custom_sampler(self._pipe, custom_sampler):
-            with apply_custom_schedule(self._pipe, self._settings.schedule_name):
-                output = self._pipe(**gen_kwargs)
+        from qwenimg2512.pipeline_patch import apply_custom_sampler, apply_custom_schedule, apply_smc_cfg
+        with apply_smc_cfg(self._pipe, getattr(self._settings, "smc_cfg_enabled", False), getattr(self._settings, "smc_k", 0.2), getattr(self._settings, "smc_lambda", 5.0)):
+            with apply_custom_sampler(self._pipe, custom_sampler):
+                with apply_custom_schedule(self._pipe, self._settings.schedule_name):
+                    output = self._pipe(**gen_kwargs)
         _log_gpu_memory("inference done")
 
         self._raise_if_cancelled()

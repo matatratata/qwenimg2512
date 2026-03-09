@@ -27,7 +27,8 @@ def _free_gpu_memory() -> None:
 class _WanCache:
     def __init__(self):
         self.pipe = None
-        self.gguf_path = None
+        self.gguf_high_noise = None
+        self.gguf_low_noise = None
         self.base_model = None
 
 
@@ -92,16 +93,24 @@ class WanWorker(QThread):
         input_image = Image.open(self._settings.input_image).convert("RGB")
         input_image = resize_with_fit_mode(input_image, width, height, "cover")
 
-        gguf_path = self._model_paths.wan_gguf
+        gguf_high_noise = self._model_paths.wan_gguf_high_noise
+        gguf_low_noise = self._model_paths.wan_gguf_low_noise
         base_dir = self._model_paths.wan_base_model_dir
 
-        if not Path(gguf_path).is_file():
-            raise FileNotFoundError(f"Wan GGUF not found at {gguf_path}")
+        if not Path(gguf_high_noise).is_file():
+            raise FileNotFoundError(f"Wan high-noise GGUF not found at {gguf_high_noise}")
+        if not Path(gguf_low_noise).is_file():
+            raise FileNotFoundError(f"Wan low-noise GGUF not found at {gguf_low_noise}")
         if not Path(base_dir).is_dir():
             raise FileNotFoundError(f"Wan Base Directory not found at {base_dir}")
 
         c = _GLOBAL_CACHE
-        if c.pipe is not None and c.gguf_path == gguf_path and c.base_model == base_dir:
+        if (
+            c.pipe is not None
+            and c.gguf_high_noise == gguf_high_noise
+            and c.gguf_low_noise == gguf_low_noise
+            and c.base_model == base_dir
+        ):
             logger.info("Using cached Wan pipeline")
             self.stage_changed.emit("Using cached model ✓")
             pipe = c.pipe
@@ -112,25 +121,35 @@ class WanWorker(QThread):
                 c.pipe = None
                 _free_gpu_memory()
 
-            self.stage_changed.emit("Loading Wan Transformer (GGUF)...")
+            self.stage_changed.emit("Loading Wan Transformer (high-noise GGUF)...")
             self._raise_if_cancelled()
 
             transformer = WanTransformer3DModel.from_single_file(
-                gguf_path,
+                gguf_high_noise,
                 quantization_config=GGUFQuantizationConfig(compute_dtype=torch.bfloat16),
                 torch_dtype=torch.bfloat16,
-                config=base_dir,
-                subfolder="transformer",
+                config=str(Path(base_dir) / "transformer"),
             )
-
-            # Diffusers GGUF compat patch
             if hasattr(transformer.config, "image_dim"):
                 transformer.config.image_dim = None
+
+            self.stage_changed.emit("Loading Wan Transformer 2 (low-noise GGUF)...")
+            self._raise_if_cancelled()
+
+            transformer_2 = WanTransformer3DModel.from_single_file(
+                gguf_low_noise,
+                quantization_config=GGUFQuantizationConfig(compute_dtype=torch.bfloat16),
+                torch_dtype=torch.bfloat16,
+                config=str(Path(base_dir) / "transformer_2"),
+            )
+            if hasattr(transformer_2.config, "image_dim"):
+                transformer_2.config.image_dim = None
 
             self.stage_changed.emit("Loading Wan Pipeline...")
             pipe = WanImageToVideoPipeline.from_pretrained(
                 base_dir,
                 transformer=transformer,
+                transformer_2=transformer_2,
                 torch_dtype=torch.bfloat16,
             )
 
@@ -146,7 +165,8 @@ class WanWorker(QThread):
             pipe.vae.enable_slicing()
 
             c.pipe = pipe
-            c.gguf_path = gguf_path
+            c.gguf_high_noise = gguf_high_noise
+            c.gguf_low_noise = gguf_low_noise
             c.base_model = base_dir
 
         self._raise_if_cancelled()
@@ -191,22 +211,23 @@ class WanWorker(QThread):
             if custom_sampler is None:
                 logger.warning("Sampler %s not found, falling back to default scheduler", self._settings.sampler_name)
 
-        from qwenimg2512.pipeline_patch import apply_custom_sampler, apply_custom_schedule
+        from qwenimg2512.pipeline_patch import apply_custom_sampler, apply_custom_schedule, apply_smc_cfg
 
-        with apply_custom_sampler(pipe, custom_sampler):
-            with apply_custom_schedule(pipe, getattr(self._settings, "schedule_name", "default")):
-                output = pipe(
-                    prompt=self._settings.prompt,
-                    negative_prompt=self._settings.negative_prompt if self._settings.negative_prompt else None,
-                    image=input_image,
-                    num_frames=self._settings.frames,
-                    height=height,
-                    width=width,
-                    num_inference_steps=self._settings.num_inference_steps,
-                    guidance_scale=self._settings.guidance_scale,
-                    generator=generator,
-                    callback_on_step_end=step_callback,
-                )
+        with apply_smc_cfg(pipe, getattr(self._settings, "smc_cfg_enabled", False), getattr(self._settings, "smc_k", 0.2), getattr(self._settings, "smc_lambda", 5.0)):
+            with apply_custom_sampler(pipe, custom_sampler):
+                with apply_custom_schedule(pipe, getattr(self._settings, "schedule_name", "default")):
+                    output = pipe(
+                        prompt=self._settings.prompt,
+                        negative_prompt=self._settings.negative_prompt if self._settings.negative_prompt else None,
+                        image=input_image,
+                        num_frames=self._settings.frames,
+                        height=height,
+                        width=width,
+                        num_inference_steps=self._settings.num_inference_steps,
+                        guidance_scale=self._settings.guidance_scale,
+                        generator=generator,
+                        callback_on_step_end=step_callback,
+                    )
 
         self._raise_if_cancelled()
         self.stage_changed.emit("Saving outputs...")

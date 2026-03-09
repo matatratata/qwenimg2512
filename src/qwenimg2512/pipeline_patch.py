@@ -15,6 +15,7 @@ from typing import Any
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 
 from qwenimg2512.schedules import get_bong_tangent_schedule, get_beta57_schedule
 
@@ -559,17 +560,27 @@ def _chunked_attn_call(
 ):
     """Chunked replacement for QwenDoubleStreamAttnProcessor2_0.__call__.
 
-    1. Processes *image* Q/K/V projections + norms in ``chunk_size`` chunks.
-    2. Concatenates the processed chunks.
-    3. Runs the single SDPA on the full joint [txt, img] sequence normally.
+    Memory-optimised path that avoids three major hidden VRAM spikes:
 
-    Text tokens are tiny and always processed at once.
+    1. **No full Q tensor** — image Q is projected in chunks; each chunk
+       runs SDPA immediately against the *full* joint K/V, and the output
+       is written directly into a pre-allocated buffer.  This eliminates
+       ~318 MiB (the full ``joint_query`` tensor).
+    2. **K/V stored in SDPA layout** — ``(B, heads, seq, head_dim)`` is
+       pre-allocated once.  Writing chunk projections via ``.transpose``
+       into this buffer avoids the secondary ``.contiguous()`` copy that
+       PyTorch would otherwise create when converting between layouts.
+    3. **Pre-allocated output** — the final attention output tensor is
+       allocated up-front and filled chunk-by-chunk, avoiding the memory
+       spike from ``torch.cat`` on a list of intermediates.
+
+    Text tokens are tiny (~770) and always processed at once.
     """
     attn = attn_obj
     seq_img = hidden_states.shape[1]   # image token count (large)
     seq_txt = encoder_hidden_states.shape[1]  # text token count (small)
 
-    # ── text QKV — small, process at once ──────────────────────────────
+    # ── 1. Text QKV — small, process at once ──────────────────────────
     txt_query = attn.add_q_proj(encoder_hidden_states)
     txt_key   = attn.add_k_proj(encoder_hidden_states)
     txt_value = attn.add_v_proj(encoder_hidden_states)
@@ -590,45 +601,90 @@ def _chunked_attn_call(
         txt_query = apply_rotary_emb_qwen(txt_query, txt_freqs, use_real=False)
         txt_key   = apply_rotary_emb_qwen(txt_key,   txt_freqs, use_real=False)
 
-    # ── image QKV — chunked along token dimension ───────────────────────
     eff_chunk = chunk_size if chunk_size > 0 else seq_img
     eff_chunk = min(eff_chunk, seq_img)
 
-    # Pre-allocate joint tensors to avoid doubling memory during torch.cat
     B, _, heads, head_dim = txt_query.shape
     dtype = txt_query.dtype
     device = txt_query.device
 
-    joint_query = torch.empty((B, seq_txt + seq_img, heads, head_dim), dtype=dtype, device=device)
-    joint_key   = torch.empty((B, seq_txt + seq_img, heads, head_dim), dtype=dtype, device=device)
-    joint_value = torch.empty((B, seq_txt + seq_img, heads, head_dim), dtype=dtype, device=device)
+    # ── 2. Pre-allocate K, V in SDPA layout (B, heads, seq, head_dim) ─
+    # Writing via .transpose into these buffers avoids a secondary
+    # .contiguous() copy that would double their memory footprint.
+    K_sdpa = torch.empty((B, heads, seq_txt + seq_img, head_dim), dtype=dtype, device=device)
+    V_sdpa = torch.empty((B, heads, seq_txt + seq_img, head_dim), dtype=dtype, device=device)
 
-    # Insert text parts and free original tensors immediately
-    joint_query[:, :seq_txt] = txt_query
-    joint_key[:, :seq_txt]   = txt_key
-    joint_value[:, :seq_txt] = txt_value
-    del txt_query, txt_key, txt_value
+    # Insert text K, V and free originals
+    K_sdpa[:, :, :seq_txt, :] = txt_key.transpose(1, 2)
+    V_sdpa[:, :, :seq_txt, :] = txt_value.transpose(1, 2)
+    del txt_key, txt_value
 
+    # Chunked image K, V projections
     for start in range(0, seq_img, eff_chunk):
         end = min(start + eff_chunk, seq_img)
         hs_chunk = hidden_states[:, start:end, :]
 
         # Value chunk
         v_c = attn.to_v(hs_chunk).unflatten(-1, (attn.heads, -1))
-        joint_value[:, seq_txt + start : seq_txt + end] = v_c
+        V_sdpa[:, :, seq_txt + start : seq_txt + end, :] = v_c.transpose(1, 2)
         del v_c
-
-        # Query chunk
-        q_c = attn.to_q(hs_chunk).unflatten(-1, (attn.heads, -1))
-        if attn.norm_q is not None:
-            q_c = attn.norm_q(q_c)
 
         # Key chunk
         k_c = attn.to_k(hs_chunk).unflatten(-1, (attn.heads, -1))
         if attn.norm_k is not None:
             k_c = attn.norm_k(k_c)
 
-        # Apply RoPE
+        if img_freqs is not None:
+            from diffusers.models.transformers.transformer_qwenimage import apply_rotary_emb_qwen
+            if hasattr(img_freqs, "ndim") and img_freqs.ndim == 3:
+                freq_chunk = img_freqs[:, start:end, :]
+            else:
+                freq_chunk = img_freqs[start:end]
+            k_c = apply_rotary_emb_qwen(k_c, freq_chunk, use_real=False)
+
+        K_sdpa[:, :, seq_txt + start : seq_txt + end, :] = k_c.transpose(1, 2)
+        del k_c
+
+    # ── Helper: slice attention mask along the Q dimension ────────────
+    def _slice_mask(mask, start_idx, end_idx):
+        if mask is None:
+            return None
+        if mask.ndim == 4 and mask.shape[2] == seq_txt + seq_img:
+            return mask[:, :, start_idx:end_idx, :]
+        elif mask.ndim == 3 and mask.shape[1] == seq_txt + seq_img:
+            return mask[:, start_idx:end_idx, :]
+        elif mask.ndim == 2 and mask.shape[0] == seq_txt + seq_img:
+            return mask[start_idx:end_idx, :]
+        return mask  # broadcast-safe or already per-Q
+
+    # ── 3. Text Q → SDPA against joint K, V ───────────────────────────
+    Q_txt_sdpa = txt_query.transpose(1, 2)  # (B, heads, seq_txt, head_dim)
+    del txt_query
+
+    txt_mask = _slice_mask(attention_mask, 0, seq_txt)
+    out_txt = F.scaled_dot_product_attention(
+        Q_txt_sdpa, K_sdpa, V_sdpa,
+        attn_mask=txt_mask, dropout_p=0.0, is_causal=False,
+    )
+    # (B, heads, seq_txt, head_dim) → (B, seq_txt, heads*head_dim)
+    txt_attn_out = out_txt.transpose(1, 2).contiguous().flatten(2, 3)
+    del Q_txt_sdpa, out_txt
+
+    # ── 4. Image Q in chunks → per-chunk SDPA ────────────────────────
+    # Write SDPA output directly back into ``hidden_states`` in-place.
+    # This is safe because chunks are processed sequentially: each position
+    # is fully read (Q projection) before being overwritten with the
+    # attention result.  The caller deletes ``img_modulated`` (which IS
+    # ``hidden_states`` here) immediately after the attention call returns.
+
+    for start in range(0, seq_img, eff_chunk):
+        end = min(start + eff_chunk, seq_img)
+        hs_chunk = hidden_states[:, start:end, :]
+
+        q_c = attn.to_q(hs_chunk).unflatten(-1, (attn.heads, -1))
+        if attn.norm_q is not None:
+            q_c = attn.norm_q(q_c)
+
         if img_freqs is not None:
             from diffusers.models.transformers.transformer_qwenimage import apply_rotary_emb_qwen
             if hasattr(img_freqs, "ndim") and img_freqs.ndim == 3:
@@ -636,44 +692,24 @@ def _chunked_attn_call(
             else:
                 freq_chunk = img_freqs[start:end]
             q_c = apply_rotary_emb_qwen(q_c, freq_chunk, use_real=False)
-            k_c = apply_rotary_emb_qwen(k_c, freq_chunk, use_real=False)
 
-        joint_query[:, seq_txt + start : seq_txt + end] = q_c
+        Q_img_sdpa = q_c.transpose(1, 2)  # (B, heads, chunk, head_dim)
         del q_c
-        
-        joint_key[:, seq_txt + start : seq_txt + end] = k_c
-        del k_c
 
+        img_mask = _slice_mask(attention_mask, seq_txt + start, seq_txt + end)
+        out_chunk = F.scaled_dot_product_attention(
+            Q_img_sdpa, K_sdpa, V_sdpa,
+            attn_mask=img_mask, dropout_p=0.0, is_causal=False,
+        )
+        # Overwrite in-place — hs_chunk (view) is no longer needed
+        hidden_states[:, start:end] = out_chunk.transpose(1, 2).contiguous().flatten(2, 3)
+        del Q_img_sdpa, out_chunk
 
-    from diffusers.models.transformers.transformer_qwenimage import dispatch_attention_fn
-    from diffusers.models.attention_processor import Attention  # noqa: F401
+    del K_sdpa, V_sdpa
 
-    attn_proc = attn.processor
-    dtype_to_use = joint_query.dtype
-    
-    joint_hidden_states = dispatch_attention_fn(
-        joint_query,
-        joint_key,
-        joint_value,
-        attn_mask=attention_mask,
-        dropout_p=0.0,
-        is_causal=False,
-        backend=getattr(attn_proc, "_attention_backend", None),
-        parallel_config=getattr(attn_proc, "_parallel_config", None),
-    )
-
-    # Critical memory saving: Free Q, K, V immediately after attention is done!
-    del joint_query, joint_key, joint_value
-
-    joint_hidden_states = joint_hidden_states.flatten(2, 3).to(dtype_to_use)
-
-    txt_attn_out = joint_hidden_states[:, :seq_txt, :]
-    img_attn_out = joint_hidden_states[:, seq_txt:, :]
-    
-    # Free the joint array as soon as we slice it
-    del joint_hidden_states
-
-    img_attn_out = attn.to_out[0](img_attn_out.contiguous())
+    # ── 5. Final output projections ───────────────────────────────────
+    # hidden_states now contains the raw attention output (repurposed in-place)
+    img_attn_out = attn.to_out[0](hidden_states)
     if len(attn.to_out) > 1:
         img_attn_out = attn.to_out[1](img_attn_out)
 
@@ -846,3 +882,177 @@ def apply_block_swap(pipe: Any, num_blocks_on_cpu: int):
             block.forward = orig
             block.to(gpu_device)
         logger.info("Block CPU-swap restored: %d blocks moved back to %s", n_swap, gpu_device)
+
+
+# ---------------------------------------------------------------------------
+# SMC-CFG (SLIDING MODE CONTROL) CONTEXT MANAGER
+# Exact implementation of CFG-Ctrl (CVPR 2026) — hanyang-21/CFG-Ctrl
+# Paper formula:
+#   e_t = v_cond - v_uncond                          (guidance error)
+#   s   = (e_t - e_{t-1}) + lambda * e_{t-1}         (sliding surface)
+#   u_sw = -K * sign(s)                               (switching control)
+#   output = v_uncond + w * (e_t + u_sw)              (guided prediction)
+# ---------------------------------------------------------------------------
+@contextmanager
+def apply_smc_cfg(pipe: Any, smc_cfg_enabled: bool, smc_k: float = 0.2, smc_lambda: float = 5.0):
+    """
+    Applies Sliding Mode Control for Classifier-Free Guidance (SMC-CFG).
+
+    Algebraically modifies the transformer output so Diffusers' native CFG
+    loop naturally computes the exact SMC-CFG formula.
+
+    Parameters
+    ----------
+    smc_k : float
+        Switching gain (K in the paper).  Recommended: 0.2.
+    smc_lambda : float
+        Exponential decay rate for the sliding surface (λ in the paper).
+        Recommended: 5.0.
+    """
+    if not smc_cfg_enabled or smc_k <= 0.0:
+        yield
+        return
+
+    transformer = pipe.transformer
+    orig_forward = transformer.forward
+
+    # Cross-timestep state — tracks the previous guidance error
+    state = {
+        "prev_guidance_eps": None,   # e_{t-1}
+        "cond_pred": None,           # for sequential true_cfg
+        "last_timestep": None,
+    }
+
+    def _smc_correct(guidance_eps: torch.Tensor) -> torch.Tensor:
+        """Apply the sliding-mode switching correction to the guidance error."""
+        if state["prev_guidance_eps"] is None:
+            # First timestep initialization
+            state["prev_guidance_eps"] = guidance_eps.detach()
+
+        # Sliding surface: s = (e_t - e_{t-1}) + λ * e_{t-1}
+        s = (guidance_eps - state["prev_guidance_eps"]) + smc_lambda * state["prev_guidance_eps"]
+        # Switching control
+        u_sw = -smc_k * torch.sign(s)
+        # Corrected error
+        corrected = guidance_eps + u_sw
+        # Store the RAW error to track the intrinsic generative dynamics.
+        # The neural network's next prediction already implicitly reflects the
+        # system's reaction to the previous control action (closed-loop).
+        # Storing the corrected error feeds the discontinuous sign(s) term back
+        # into the next sliding surface, injecting (λ-1)*u_sw and causing the
+        # exact ±K chattering we want to avoid.
+        state["prev_guidance_eps"] = guidance_eps.detach()
+        return corrected
+
+    def patched_forward(*args, **kwargs):
+        out = orig_forward(*args, **kwargs)
+
+        # Extract hidden states
+        if isinstance(out, tuple):
+            hidden_states = out[0]
+        elif hasattr(out, "sample"):
+            hidden_states = out.sample
+        else:
+            hidden_states = out
+
+        B = hidden_states.shape[0]
+
+        # Track timestep to match sequential uncond/cond pairs
+        timestep = kwargs.get("timestep", args[1] if len(args) > 1 else None)
+        if isinstance(timestep, torch.Tensor):
+            timestep = timestep.item() if timestep.numel() == 1 else timestep[0].item()
+
+        import sys
+        is_batched_cfg, is_true_cfg, w = False, False, 1.0
+
+        # Introspect caller to detect CFG loop type and scale
+        frame = sys._getframe(0)
+        try:
+            for _ in range(15):
+                frame = frame.f_back
+                if frame is None:
+                    break
+                loc = frame.f_locals
+                if "do_classifier_free_guidance" in loc and loc["do_classifier_free_guidance"]:
+                    is_batched_cfg = True
+                    w = loc.get("guidance_scale", getattr(pipe, "guidance_scale", 1.0))
+                    break
+                elif "do_true_cfg" in loc and loc["do_true_cfg"]:
+                    is_true_cfg = True
+                    w = loc.get("true_cfg_scale", 1.0)
+                    break
+        finally:
+            del frame
+
+        if isinstance(w, (list, tuple)):
+            w = w[0] if len(w) > 0 else 1.0
+        w = max(float(w), 1e-5)
+
+        if abs(w - 1.0) < 1e-4:
+            return out
+
+        # 1. Batched CFG (Wan / standard diffusers)
+        #    hidden_states = [uncond_batch ; cond_batch]
+        #    pipe will compute: U + w*(C - U)
+        #    We want:           U + w*(corrected_error)
+        #    So we set:         C_new = U + corrected_error
+        if is_batched_cfg and B > 1 and B % 2 == 0:
+            half = B // 2
+            U = hidden_states[:half]
+            C = hidden_states[half:]
+
+            error = C - U                   # e_t = v_cond - v_uncond
+            corrected = _smc_correct(error)  # apply sliding-mode correction
+            C_new = U + corrected            # pipe computes U + w*(C_new - U) = U + w*corrected
+
+            new_hidden_states = torch.cat([U, C_new], dim=0)
+
+            if isinstance(out, tuple):
+                return (new_hidden_states,) + out[1:]
+            elif hasattr(out, "sample"):
+                out.sample = new_hidden_states
+                return out
+            else:
+                return new_hidden_states
+
+        # 2. Sequential CFG (Qwen Edit true_cfg)
+        #    Two separate forward passes per timestep: cond first, uncond second.
+        #    pipe will compute: U + w*(C - U)
+        elif is_true_cfg:
+            if timestep is not None and state.get("last_timestep") != timestep:
+                state["cond_pred"] = None
+                state["last_timestep"] = timestep
+
+            if state["cond_pred"] is None:
+                state["cond_pred"] = hidden_states.clone()  # First pass is COND
+                return out
+            else:
+                cond_pred = state["cond_pred"]
+                uncond_pred = hidden_states  # Second pass is UNCOND
+                state["cond_pred"] = None
+
+                error = cond_pred - uncond_pred         # e_t
+                corrected = _smc_correct(error)          # apply SMC
+                if abs(1.0 - w) > 1e-5:
+                    u_sw = corrected - error
+                    fake_uncond = uncond_pred + u_sw * (w / (1.0 - w))
+
+                    if isinstance(out, tuple):
+                        return (fake_uncond,) + out[1:]
+                    elif hasattr(out, "sample"):
+                        out.sample = fake_uncond
+                        return out
+                    else:
+                        return fake_uncond
+
+        return out
+
+    transformer.forward = patched_forward
+    logger.info("SMC-CFG enabled: K=%.3f, lambda=%.3f", smc_k, smc_lambda)
+    try:
+        yield
+    finally:
+        transformer.forward = orig_forward
+        state["prev_guidance_eps"] = None
+        state["cond_pred"] = None
+        logger.info("SMC-CFG restored")
