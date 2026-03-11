@@ -152,6 +152,11 @@ class EditSettings:
     lora_scale_end: float = 1.0
     lora_step_start: int = 0
     lora_step_end: int = -1
+    lora_path_2: str = ""
+    lora_scale_start_2: float = 1.0
+    lora_scale_end_2: float = 1.0
+    lora_step_start_2: int = 0
+    lora_step_end_2: int = -1
     ref_strength_1: float = 1.0
     ref_strength_2: float = 1.0
     ref_strength_3: float = 1.0

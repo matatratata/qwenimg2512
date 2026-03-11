@@ -261,6 +261,13 @@ class MainWindow(QMainWindow):
         self.edit_tab.lora_widget.set_scale_end(es.lora_scale_end)
         self.edit_tab.lora_widget.set_step_start(es.lora_step_start)
         self.edit_tab.lora_widget.set_step_end(es.lora_step_end)
+
+        self.edit_tab.lora_widget_2.set_lora_path(es.lora_path_2)
+        self.edit_tab.lora_widget_2.set_scale_start(es.lora_scale_start_2)
+        self.edit_tab.lora_widget_2.set_scale_end(es.lora_scale_end_2)
+        self.edit_tab.lora_widget_2.set_step_start(es.lora_step_start_2)
+        self.edit_tab.lora_widget_2.set_step_end(es.lora_step_end_2)
+
         self.edit_tab.set_ref_strengths([es.ref_strength_1, es.ref_strength_2, es.ref_strength_3])
         self.edit_tab.set_memory_settings(es.ffn_chunk_size, es.blocks_to_swap, es.attn_chunk_size)
         self.edit_tab.settings_widget.set_smc_settings(es.smc_cfg_enabled, es.smc_k)
@@ -399,6 +406,13 @@ class MainWindow(QMainWindow):
         es.lora_scale_end = self.edit_tab.lora_widget.get_scale_end()
         es.lora_step_start = self.edit_tab.lora_widget.get_step_start()
         es.lora_step_end = self.edit_tab.lora_widget.get_step_end()
+
+        es.lora_path_2 = self.edit_tab.lora_widget_2.get_lora_path()
+        es.lora_scale_start_2 = self.edit_tab.lora_widget_2.get_scale_start()
+        es.lora_scale_end_2 = self.edit_tab.lora_widget_2.get_scale_end()
+        es.lora_step_start_2 = self.edit_tab.lora_widget_2.get_step_start()
+        es.lora_step_end_2 = self.edit_tab.lora_widget_2.get_step_end()
+
         strengths = self.edit_tab.get_ref_strengths()
         es.ref_strength_1 = strengths[0] if len(strengths) > 0 else 1.0
         es.ref_strength_2 = strengths[1] if len(strengths) > 1 else 1.0

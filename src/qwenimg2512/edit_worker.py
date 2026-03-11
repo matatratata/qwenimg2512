@@ -385,16 +385,147 @@ class EditWorker(QThread):
         except AttributeError:
             pass
 
-        # ── Load LoRA on CPU, fuse into base weights, free adapters ──
+        # ── Load LoRA adapters (kept unfused for GGUF models) ─────────────
+        # GGUF stores weights as packed bytes with shapes that differ from the
+        # dequantised tensor.  Fusing (base_weight += delta) would require
+        # dequantising *every* targeted layer to bf16, destroying the memory
+        # savings of GGUF and causing OOM.
+        #
+        # Instead we keep the LoRA adapters loaded but unfused.  During the
+        # forward pass peft applies them dynamically:
+        #   output = base_layer(x) + lora_B(lora_A(x)) * scale
+        # This operates in activation space and works correctly with GGUF's
+        # on-the-fly dequantisation.
+        lora_specs = []
         lora_path = self._settings.lora_path
         if lora_path and Path(lora_path).is_file():
-            self.stage_changed.emit("Loading LoRA adapter (CPU)...")
-            pipe.load_lora_weights(lora_path, adapter_name="default")
-            pipe.set_adapters(["default"], [self._settings.lora_scale_start])
-            self.stage_changed.emit("Fusing LoRA into model...")
-            pipe.fuse_lora()
-            pipe.unload_lora_weights()
-            logger.info("LoRA fused (scale=%.2f) from %s", self._settings.lora_scale_start, lora_path)
+            lora_specs.append(("lora1", lora_path, self._settings.lora_scale_start))
+        lora_path_2 = getattr(self._settings, "lora_path_2", "")
+        if lora_path_2 and Path(lora_path_2).is_file():
+            lora_specs.append(("lora2", lora_path_2, getattr(self._settings, "lora_scale_start_2", 1.0)))
+
+        if lora_specs:
+            adapter_names = []
+            adapter_weights = []
+            for adapter_name, path, scale in lora_specs:
+                self.stage_changed.emit(f"Loading LoRA adapter ({adapter_name})...")
+                # Patch diffusers' Qwen LoRA converter to tolerate alpha-less LoRAs.
+                # Some LoRAs (e.g. "merged version" files) omit .alpha keys entirely
+                # because the alpha/rank scale was already baked into the weights at
+                # training time.  Diffusers' get_alpha_scales() hard-pops the alpha
+                # key and crashes with KeyError when it is absent.  We wrap the
+                # function so that a missing alpha key is treated as alpha == rank
+                # (i.e. scale == 1.0), which is the correct no-op.
+                import diffusers.loaders.lora_conversion_utils as _lcu
+                _original_convert_qwen = _lcu._convert_non_diffusers_qwen_lora_to_diffusers
+
+                def _patched_convert_qwen(state_dict, _orig=_original_convert_qwen):
+                    """Wrap the Qwen LoRA converter to handle missing alpha keys."""
+                    import diffusers.loaders.lora_conversion_utils as _m
+
+                    # Temporarily replace the inner get_alpha_scales so that a
+                    # missing key returns scale == 1.0 instead of raising KeyError.
+                    _original_fn = _m._convert_non_diffusers_qwen_lora_to_diffusers
+
+                    # We need to re-implement just the alpha-tolerant inner path.
+                    has_diffusion_model = any(k.startswith("diffusion_model.") for k in state_dict)
+                    if has_diffusion_model:
+                        state_dict = {k.removeprefix("diffusion_model."): v for k, v in state_dict.items()}
+
+                    has_lora_unet = any(k.startswith("lora_unet_") for k in state_dict)
+                    if has_lora_unet:
+                        # Fall back to original – lora_unet_ Qwen paths are fine
+                        return _orig(state_dict)
+
+                    has_default = any("default." in k for k in state_dict)
+                    if has_default:
+                        state_dict = {k.replace("default.", ""): v for k, v in state_dict.items()}
+
+                    converted_state_dict = {}
+                    all_keys = list(state_dict.keys())
+                    down_key = ".lora_down.weight"
+                    up_key = ".lora_up.weight"
+                    a_key = ".lora_A.weight"
+                    b_key = ".lora_B.weight"
+
+                    has_non_diffusers_lora_id = any(down_key in k or up_key in k for k in all_keys)
+                    has_diffusers_lora_id = any(a_key in k or b_key in k for k in all_keys)
+
+                    if has_non_diffusers_lora_id:
+                        def _get_alpha_scales_safe(down_weight, alpha_key):
+                            rank = down_weight.shape[0]
+                            if alpha_key in state_dict:
+                                alpha = state_dict.pop(alpha_key).item()
+                                logger.debug("LoRA alpha found for %s: %.4f", alpha_key, alpha)
+                            else:
+                                # Alpha-less LoRA: weights are already at the correct scale
+                                alpha = float(rank)
+                                logger.debug("LoRA alpha missing for %s, assuming scale=1.0", alpha_key)
+                            scale = alpha / rank
+                            scale_down = scale
+                            scale_up = 1.0
+                            while scale_down * 2 < scale_up:
+                                scale_down *= 2
+                                scale_up /= 2
+                            return scale_down, scale_up
+
+                        for k in all_keys:
+                            if k.endswith(down_key):
+                                diffusers_down_key = k.replace(down_key, ".lora_A.weight")
+                                diffusers_up_key = k.replace(down_key, up_key).replace(up_key, ".lora_B.weight")
+                                alpha_key = k.replace(down_key, ".alpha")
+                                down_weight = state_dict.pop(k)
+                                up_weight = state_dict.pop(k.replace(down_key, up_key))
+                                scale_down, scale_up = _get_alpha_scales_safe(down_weight, alpha_key)
+                                converted_state_dict[diffusers_down_key] = down_weight * scale_down
+                                converted_state_dict[diffusers_up_key] = up_weight * scale_up
+
+                    elif has_diffusers_lora_id:
+                        for k in all_keys:
+                            if a_key in k or b_key in k:
+                                converted_state_dict[k] = state_dict.pop(k)
+                            elif ".alpha" in k:
+                                state_dict.pop(k)
+
+                    # Strip out diff_b / .diff keys that this converter does not handle
+                    # (they are bias/norm delta keys stored alongside LoRA weights in
+                    # some training frameworks and are not consumed by diffusers).
+                    for k in list(state_dict.keys()):
+                        if k.endswith(".diff_b") or k.endswith(".diff"):
+                            state_dict.pop(k)
+                            logger.debug("Dropping unhandled LoRA key: %s", k)
+
+                    if len(state_dict) > 0:
+                        raise ValueError(
+                            f"`state_dict` should be empty at this point but has {list(state_dict.keys())[:10]}"
+                        )
+
+                    converted_state_dict = {f"transformer.{k}": v for k, v in converted_state_dict.items()}
+                    return converted_state_dict
+
+                # lora_pipeline.py does `from lora_conversion_utils import ...` so
+                # it holds its OWN local binding — we must patch that module too.
+                import diffusers.loaders.lora_pipeline as _lp
+                _lcu._convert_non_diffusers_qwen_lora_to_diffusers = _patched_convert_qwen
+                _lp._convert_non_diffusers_qwen_lora_to_diffusers = _patched_convert_qwen
+                try:
+                    pipe.load_lora_weights(path, adapter_name=adapter_name)
+                finally:
+                    _lcu._convert_non_diffusers_qwen_lora_to_diffusers = _original_convert_qwen
+                    _lp._convert_non_diffusers_qwen_lora_to_diffusers = _original_convert_qwen
+
+                adapter_names.append(adapter_name)
+                adapter_weights.append(scale)
+                logger.info("LoRA '%s' loaded from %s", adapter_name, path)
+
+            pipe.set_adapters(adapter_names, adapter_weights)
+            logger.info(
+                "Active LoRA adapters: %s  weights: %s",
+                adapter_names, adapter_weights,
+            )
+
+            # ── Debug: verify adapters are attached to the transformer ──
+            self._log_lora_debug_info(pipe.transformer)
 
         num_gpus = torch.cuda.device_count()
         if num_gpus >= 2:
@@ -406,6 +537,40 @@ class EditWorker(QThread):
             pipe.enable_model_cpu_offload()
 
         return pipe
+
+    @staticmethod
+    def _log_lora_debug_info(transformer) -> None:
+        """Log detailed info about LoRA adapters attached to the transformer."""
+        from peft.tuners.tuners_utils import BaseTunerLayer
+
+        lora_layers = 0
+        adapter_names_seen: set[str] = set()
+        sample_logged = 0
+
+        for name, module in transformer.named_modules():
+            if not isinstance(module, BaseTunerLayer):
+                continue
+            lora_layers += 1
+            # Collect adapter names from this layer's lora_A dict
+            layer_adapters = list(getattr(module, "lora_A", {}).keys())
+            adapter_names_seen.update(layer_adapters)
+
+            # Log shape info for the first few layers as a sanity check
+            if sample_logged < 3:
+                for adapter in layer_adapters:
+                    a_shape = module.lora_A[adapter].weight.shape
+                    b_shape = module.lora_B[adapter].weight.shape
+                    logger.info(
+                        "  LoRA layer %s adapter='%s': A=%s  B=%s  (rank=%d)",
+                        name, adapter, list(a_shape), list(b_shape), a_shape[0],
+                    )
+                sample_logged += 1
+
+        active = list(transformer.active_adapters()) if hasattr(transformer, "active_adapters") else "N/A"
+        logger.info(
+            "LoRA debug: %d wrapped layer(s), adapters found: %s, active: %s",
+            lora_layers, sorted(adapter_names_seen), active,
+        )
 
     def _emit_vram(self) -> None:
         try:
