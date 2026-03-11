@@ -503,8 +503,6 @@ class EditWorker(QThread):
                     converted_state_dict = {f"transformer.{k}": v for k, v in converted_state_dict.items()}
                     return converted_state_dict
 
-                # lora_pipeline.py does `from lora_conversion_utils import ...` so
-                # it holds its OWN local binding — we must patch that module too.
                 import diffusers.loaders.lora_pipeline as _lp
                 _lcu._convert_non_diffusers_qwen_lora_to_diffusers = _patched_convert_qwen
                 _lp._convert_non_diffusers_qwen_lora_to_diffusers = _patched_convert_qwen
@@ -523,6 +521,29 @@ class EditWorker(QThread):
                 "Active LoRA adapters: %s  weights: %s",
                 adapter_names, adapter_weights,
             )
+
+            # ── Force-cast all LoRA weights to bf16 ───────────────────────
+            # Some LoRA files ship as fp32 (e.g. "merged_version_rank_32_fp32"),
+            # doubling their VRAM footprint.  The base model runs in bf16 and
+            # GGUF dequantises to bf16, so fp32 LoRA weights gain nothing and
+            # waste ~325 MB per rank-32 adapter on 846 layers.
+            from peft.tuners.tuners_utils import BaseTunerLayer
+
+            n_cast = 0
+            for _name, module in pipe.transformer.named_modules():
+                if not isinstance(module, BaseTunerLayer):
+                    continue
+                for sub in [getattr(module, "lora_A", {}), getattr(module, "lora_B", {})]:
+                    # nn.ModuleDict and dict both iterate over keys by default
+                    if hasattr(sub, "values"):
+                        sub = sub.values()
+                    for linear in sub:
+                        for param in linear.parameters():
+                            if param.dtype != torch.bfloat16:
+                                param.data = param.data.to(torch.bfloat16)
+                                n_cast += 1
+            if n_cast:
+                logger.info("Force-cast %d LoRA parameters to bfloat16", n_cast)
 
             # ── Debug: verify adapters are attached to the transformer ──
             self._log_lora_debug_info(pipe.transformer)
