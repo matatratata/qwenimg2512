@@ -18,6 +18,8 @@ ASPECT_RATIOS: dict[str, tuple[int, int]] = {
     "1:1 (1344x1344)": (1344, 1344),
     "16:9 (1664x960)": (1664, 960),
     "9:16 (960x1664)": (960, 1664),
+    "4:3 (1024x768)": (1024, 768),
+    "3:4 (768x1024)": (768, 1024),
     "4:3 (1472x1088)": (1472, 1088),
     "3:4 (1088x1472)": (1088, 1472),
     "3:2 (1600x1088)": (1600, 1088),
@@ -25,8 +27,8 @@ ASPECT_RATIOS: dict[str, tuple[int, int]] = {
 
     # Half (64-divisible)
     "1:1 Half (640x640)": (640, 640),
-    "16:9 Half (832x448)": (832, 448),
-    "9:16 Half (448x832)": (448, 832),
+    "16:9 Half (832x480)": (832, 480),
+    "9:16 Half (480x832)": (480, 832),
     "4:3 Half (768x576)": (768, 576),
     "3:4 Half (576x768)": (576, 768),
     "3:2 Half (768x512)": (768, 512),
@@ -166,6 +168,7 @@ class EditSettings:
     smc_cfg_enabled: bool = False
     smc_k: float = 0.10
     smc_lambda: float = 6.0
+    svd_merge_loras: bool = False
 
 
 @dataclass
@@ -197,6 +200,9 @@ class Edit2509Settings:
     lora_scale_end_2: float = 1.0
     lora_step_start_2: int = 0
     lora_step_end_2: int = -1
+    ffn_chunk_size: int = 0    # 0 = disabled; try 2048 for large resolutions
+    blocks_to_swap: int = 0   # 0 = disabled; N = move last N blocks to CPU
+    attn_chunk_size: int = 0  # 0 = disabled; try 4096 for large resolutions
     smc_cfg_enabled: bool = False
     smc_k: float = 0.10
     smc_lambda: float = 6.0

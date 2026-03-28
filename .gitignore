@@ -5,3 +5,5 @@ src/qwenimg2512/widgets/__pycache__
 .vscode
 .vscode
 src/qwenimg2512/samplers/__pycache__
+webui/__pycache__
+webui/node_modules

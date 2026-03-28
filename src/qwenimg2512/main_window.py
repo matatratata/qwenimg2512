@@ -150,7 +150,15 @@ class MainWindow(QMainWindow):
         self.wan_tab.cancel_requested.connect(self._cancel_wan_generation)
         self.tabs.addTab(self.wan_tab, "Wan Cinematic")
 
-        # --- Tab 6: History ---
+        # --- Tab 6: Prompt Crafter ---
+        from qwenimg2512.widgets.prompt_crafter_tab import PromptCrafterTabWidget
+        self.prompt_crafter_tab = PromptCrafterTabWidget()
+        self.prompt_crafter_tab.send_to_edit.connect(self._on_crafter_send_edit)
+        self.prompt_crafter_tab.send_to_edit_2509.connect(self._on_crafter_send_edit_2509)
+        self.prompt_crafter_tab.send_to_generate.connect(self._on_crafter_send_generate)
+        self.tabs.addTab(self.prompt_crafter_tab, "Prompt Crafter")
+
+        # --- Tab 7: History ---
         self.history_tab = HistoryTabWidget(self.history_manager)
         self.tabs.addTab(self.history_tab, "History")
 
@@ -271,6 +279,7 @@ class MainWindow(QMainWindow):
         self.edit_tab.set_ref_strengths([es.ref_strength_1, es.ref_strength_2, es.ref_strength_3])
         self.edit_tab.set_memory_settings(es.ffn_chunk_size, es.blocks_to_swap, es.attn_chunk_size)
         self.edit_tab.settings_widget.set_smc_settings(es.smc_cfg_enabled, es.smc_k)
+        self.edit_tab.set_svd_merge(es.svd_merge_loras)
 
 
         # Edit 2509 settings
@@ -305,6 +314,7 @@ class MainWindow(QMainWindow):
         self.edit_2509_tab.lora_widget_2.set_scale_end(es2.lora_scale_end_2)
         self.edit_2509_tab.lora_widget_2.set_step_start(es2.lora_step_start_2)
         self.edit_2509_tab.lora_widget_2.set_step_end(es2.lora_step_end_2)
+        self.edit_2509_tab.set_memory_settings(es2.ffn_chunk_size, es2.blocks_to_swap, es2.attn_chunk_size)
         self.edit_2509_tab.settings_widget.set_smc_settings(es2.smc_cfg_enabled, es2.smc_k)
 
         # SeedVR2 settings
@@ -420,6 +430,7 @@ class MainWindow(QMainWindow):
         es.ffn_chunk_size, es.blocks_to_swap, es.attn_chunk_size = self.edit_tab.get_memory_settings()
         smc_e = self.edit_tab.settings_widget.get_smc_settings()
         es.smc_cfg_enabled, es.smc_k = smc_e["enabled"], smc_e["k"]
+        es.svd_merge_loras = self.edit_tab.get_svd_merge()
 
 
         # Edit 2509 settings
@@ -458,6 +469,7 @@ class MainWindow(QMainWindow):
         es2.lora_scale_end_2 = self.edit_2509_tab.lora_widget_2.get_scale_end()
         es2.lora_step_start_2 = self.edit_2509_tab.lora_widget_2.get_step_start()
         es2.lora_step_end_2 = self.edit_2509_tab.lora_widget_2.get_step_end()
+        es2.ffn_chunk_size, es2.blocks_to_swap, es2.attn_chunk_size = self.edit_2509_tab.get_memory_settings()
         smc_e2 = self.edit_2509_tab.settings_widget.get_smc_settings()
         es2.smc_cfg_enabled, es2.smc_k = smc_e2["enabled"], smc_e2["k"]
 
@@ -1027,6 +1039,34 @@ class MainWindow(QMainWindow):
             subprocess.Popen(["open", str(output_dir)])  # noqa: S603, S607
         else:
             subprocess.Popen(["xdg-open", str(output_dir)])  # noqa: S603, S607
+
+    # --- Prompt Crafter send-to handlers ---
+
+    def _switch_to_tab(self, label: str) -> None:
+        """Switch the tab widget to the tab whose text matches *label*."""
+        for i in range(self.tabs.count()):
+            if self.tabs.tabText(i) == label:
+                self.tabs.setCurrentIndex(i)
+                return
+
+    def _on_crafter_send_edit(self, prompt: str, lora_repo: str, lora_weights: str) -> None:
+        self.edit_tab.prompt_widget.set_prompt(prompt)
+        if lora_repo:
+            self.edit_tab.lora_widget.set_lora_path(lora_repo)
+        self._switch_to_tab("Edit (2511)")
+        self.statusBar().showMessage(f"Prompt sent to Edit (2511)")
+
+    def _on_crafter_send_edit_2509(self, prompt: str, lora_repo: str, lora_weights: str) -> None:
+        self.edit_2509_tab.prompt_widget.set_prompt(prompt)
+        if lora_repo:
+            self.edit_2509_tab.lora_widget.set_lora_path(lora_repo)
+        self._switch_to_tab("Edit (2509)")
+        self.statusBar().showMessage(f"Prompt sent to Edit (2509)")
+
+    def _on_crafter_send_generate(self, prompt: str) -> None:
+        self.prompt_widget.set_prompt(prompt)
+        self._switch_to_tab("Generate (2512)")
+        self.statusBar().showMessage(f"Prompt sent to Generate")
 
     def closeEvent(self, event: object) -> None:
         if self._worker:

@@ -45,9 +45,15 @@ diffusers = { git = "https://github.com/huggingface/diffusers.git" }
 dev = [
     "ruff>=0.14.0",
 ]
+webui = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.30.0",
+    "python-multipart>=0.0.9",
+]
 
 [project.scripts]
 qwenimg2512 = "qwenimg2512.__main__:main"
+qwenbuild = "qwenimg2512.webui_cli:main"
 
 [build-system]
 requires = ["uv_build>=0.9.8,<0.10.0"]

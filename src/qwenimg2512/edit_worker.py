@@ -516,7 +516,33 @@ class EditWorker(QThread):
                 adapter_weights.append(scale)
                 logger.info("LoRA '%s' loaded from %s", adapter_name, path)
 
-            pipe.set_adapters(adapter_names, adapter_weights)
+            # ── SVD-merge multiple adapters into one (optional) ──────────
+            # Keeping N adapters active means peft runs N×846 extra matmuls
+            # per denoising step and keeps N sets of A/B on GPU.  SVD merge
+            # combines them into a single adapter, halving both compute and
+            # memory.  Only triggered when the user enables the toggle.
+            svd_merge = getattr(self._settings, "svd_merge_loras", False)
+            if svd_merge and len(adapter_names) > 1:
+                self.stage_changed.emit("Merging LoRA adapters via SVD...")
+                try:
+                    pipe.transformer.add_weighted_adapter(
+                        adapters=adapter_names,
+                        weights=adapter_weights,
+                        combination_type="svd",
+                        adapter_name="merged_lora",
+                    )
+                    pipe.set_adapters(["merged_lora"], adapter_weights=[1.0])
+                    pipe.delete_adapters(adapter_names)
+                    logger.info("SVD-merged LoRAs %s (weights %s) → 'merged_lora'",
+                                adapter_names, adapter_weights)
+                    adapter_names = ["merged_lora"]
+                    adapter_weights = [1.0]
+                except Exception as exc:
+                    logger.warning("SVD merge failed (%s) — falling back to dual-adapter mode", exc)
+                    pipe.set_adapters(adapter_names, adapter_weights)
+            else:
+                pipe.set_adapters(adapter_names, adapter_weights)
+
             logger.info(
                 "Active LoRA adapters: %s  weights: %s",
                 adapter_names, adapter_weights,
@@ -524,24 +550,12 @@ class EditWorker(QThread):
 
             # ── Force-cast all LoRA weights to bf16 ───────────────────────
             # Some LoRA files ship as fp32 (e.g. "merged_version_rank_32_fp32"),
-            # doubling their VRAM footprint.  The base model runs in bf16 and
-            # GGUF dequantises to bf16, so fp32 LoRA weights gain nothing and
-            # waste ~325 MB per rank-32 adapter on 846 layers.
-            from peft.tuners.tuners_utils import BaseTunerLayer
-
+            # doubling their VRAM footprint for no quality benefit.
             n_cast = 0
-            for _name, module in pipe.transformer.named_modules():
-                if not isinstance(module, BaseTunerLayer):
-                    continue
-                for sub in [getattr(module, "lora_A", {}), getattr(module, "lora_B", {})]:
-                    # nn.ModuleDict and dict both iterate over keys by default
-                    if hasattr(sub, "values"):
-                        sub = sub.values()
-                    for linear in sub:
-                        for param in linear.parameters():
-                            if param.dtype != torch.bfloat16:
-                                param.data = param.data.to(torch.bfloat16)
-                                n_cast += 1
+            for name, param in pipe.transformer.named_parameters():
+                if "lora" in name and param.dtype != torch.bfloat16:
+                    param.data = param.data.to(torch.bfloat16)
+                    n_cast += 1
             if n_cast:
                 logger.info("Force-cast %d LoRA parameters to bfloat16", n_cast)
 

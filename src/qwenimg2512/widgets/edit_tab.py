@@ -327,6 +327,16 @@ class EditTabWidget(QWidget):
         self.telestyle_check.toggled.connect(self._on_telestyle_toggled)
         content_layout.addWidget(self.telestyle_check)
 
+        # 3c. SVD Merge LoRAs toggle
+        self.svd_merge_check = QCheckBox("SVD Merge LoRAs (merge multiple adapters into one — saves VRAM)")
+        self.svd_merge_check.setToolTip(
+            "When enabled and two LoRAs are loaded, merge them into a\n"
+            "single adapter via SVD decomposition before inference.\n"
+            "This halves LoRA weight memory and forward-pass compute.\n"
+            "Turn on if you hit OOM with dual LoRAs."
+        )
+        content_layout.addWidget(self.svd_merge_check)
+
         # 4. LoRA
         self.lora_widget = LoraSettingsWidget()
         content_layout.addWidget(self.lora_widget)
@@ -446,6 +456,12 @@ class EditTabWidget(QWidget):
 
     def get_telestyle(self) -> bool:
         return self.telestyle_check.isChecked()
+
+    def get_svd_merge(self) -> bool:
+        return self.svd_merge_check.isChecked()
+
+    def set_svd_merge(self, enabled: bool) -> None:
+        self.svd_merge_check.setChecked(enabled)
 
     def get_ref_strengths(self) -> list[float]:
         return [w.strength_spin.value() for w in self.ref_widgets]
