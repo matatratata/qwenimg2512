@@ -1212,3 +1212,72 @@ input[type="range"]::-moz-range-thumb {
   color: var(--cloud-dim);
 }
 
+/* ── Stage 05: BG Removal ──────────────────────────────── */
+.form-hint {
+  font-size: 11px;
+  color: var(--cloud-dim);
+  margin-top: 4px;
+  line-height: 1.4;
+}
+
+/* Checkerboard transparency background for gallery items and preview */
+.gallery-grid.stage-5-active .gallery-item,
+.s5-preview-canvas-wrap {
+  background-image:
+    linear-gradient(45deg, #2a2a2a 25%, transparent 25%),
+    linear-gradient(-45deg, #2a2a2a 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #2a2a2a 75%),
+    linear-gradient(-45deg, transparent 75%, #2a2a2a 75%);
+  background-size: 16px 16px;
+  background-position: 0 0, 0 8px, 8px -8px, -8px 0px;
+  background-color: #1e1e1e;
+}
+
+/* Live preview area in gallery panel */
+.s5-live-preview {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 20px;
+  flex: 1;
+  overflow: hidden;
+}
+
+.s5-preview-canvas-wrap {
+  position: relative;
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  box-shadow: var(--shadow-lg);
+  max-width: 100%;
+  max-height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.s5-preview-canvas-wrap canvas {
+  max-width: 100%;
+  max-height: calc(100vh - 200px);
+  object-fit: contain;
+  display: block;
+}
+
+.s5-preview-info {
+  font-size: 12px;
+  color: var(--cloud-dim);
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.s5-preview-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  color: var(--cloud-dim);
+  font-size: 13px;
+  padding: 40px 20px;
+  text-align: center;
+}
+

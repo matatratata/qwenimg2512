@@ -11,8 +11,11 @@ const state = {
   refImage1: null,          // File or { fromStage: url, filename }
   s3RefImage: null,         // File — Stage 03 ref image
   s4RefImage: null,         // File — Stage 04 ref image
+  s5SourceImage: null,      // File — Stage 05 source image
+  s5OriginalImageData: null,// ImageData — original pixels for live reprocessing
+  s5ProcessedCanvas: null,  // Canvas — latest processed result
   selectedGalleryImage: null,
-  historyOpen: { 1: false, 2: false, 3: false, 4: false },
+  historyOpen: { 1: false, 2: false, 3: false, 4: false, 5: false },
 };
 
 // -------- DOM --------
@@ -38,6 +41,7 @@ function initAll() {
     ['initHistory', initHistory],
     ['initWorkspaceDialog', initWorkspaceDialog],
     ['initLightbox', initLightbox],
+    ['initStage5', initStage5],
   ];
   for (const [name, fn] of inits) {
     try {
@@ -245,8 +249,11 @@ function setActiveStage(stage) {
   });
 
   // Update gallery title
-  const titles = { 1: 'Stage 01 Results', 2: 'Stage 02 Results', 3: 'Stage 03 Results', 4: 'Stage 04 Results' };
+  const titles = { 1: 'Stage 01 Results', 2: 'Stage 02 Results', 3: 'Stage 03 Results', 4: 'Stage 04 Results', 5: 'Stage 05 Results' };
   $('#galleryTitle').textContent = titles[stage] || `Stage ${String(stage).padStart(2, '0')} Results`;
+
+  // Toggle checkerboard class for stage 5 gallery
+  $('#galleryGrid').classList.toggle('stage-5-active', stage === 5);
 
   // Load gallery for this stage
   if (state.workspace) {
@@ -270,6 +277,8 @@ function initSliders() {
     ['s4LoraScale', 's4LoraScaleVal'],
     ['s4LoraScale2', 's4LoraScale2Val'],
     ['s4Steps', 's4StepsVal'],
+    ['s5Thresh', 's5ThreshVal'],
+    ['s5Feather', 's5FeatherVal'],
   ];
 
   bindings.forEach(([sliderId, valId]) => {
@@ -315,6 +324,11 @@ function initUploads() {
 
   setupUploadZone('s4Upload', 's4FileInput', 's4Preview', (file) => {
     state.s4RefImage = file;
+  });
+
+  setupUploadZone('s5Upload', 's5FileInput', 's5Preview', (file) => {
+    state.s5SourceImage = file;
+    _s5LoadSourceImage(file);
   });
 }
 
@@ -946,7 +960,7 @@ function stopProgressPolling() {
 // HISTORY
 // ============================================================
 function initHistory() {
-  ['1', '2', '3', '4'].forEach((stage) => {
+  ['1', '2', '3', '4', '5'].forEach((stage) => {
     const toggle = $(`#historyToggle${stage}`);
     const list = $(`#historyList${stage}`);
     if (toggle && list) {
@@ -1184,10 +1198,17 @@ function openLightbox(imageUrl, filename, stage) {
   $('#lightboxSingle').style.display = 'flex';
   $('#lightboxCompare').style.display = 'none';
 
-  // Show compare button for stage 2 if we have a reference image
+  // Show compare button for stages that have a reference image
   const compareBtn = $('#lightboxCompareToggle');
-  if (stage === 2 && state.refImage1) {
-    _lightboxRefUrl = URL.createObjectURL(state.refImage1);
+  const refImageForStage = {
+    2: state.refImage1,
+    3: state.s3RefImage,
+    4: state.s4RefImage,
+    5: state.s5SourceImage,
+  };
+  const refImage = refImageForStage[stage];
+  if (refImage) {
+    _lightboxRefUrl = URL.createObjectURL(refImage);
     compareBtn.style.display = 'flex';
   } else {
     compareBtn.style.display = 'none';
@@ -1251,4 +1272,278 @@ function initCompareDrag() {
     if (e.target.closest('.compare-divider')) return;
     updateFromEvent(e);
   });
+}
+
+// ============================================================
+// STAGE 05: REMOVE WHITE BACKGROUND
+// ============================================================
+let _s5RafId = null;  // for debouncing live preview
+
+function initStage5() {
+  // "Use Stage 04 Result" button
+  $('#btnUseStage4').addEventListener('click', async () => {
+    if (!state.workspace) return;
+    try {
+      const res = await fetch(`/api/workspaces/${encodeURIComponent(state.workspace.name)}/stages/4/images`);
+      const data = await res.json();
+      const images = data.images || [];
+      if (images.length === 0) {
+        alert('No Stage 04 images yet. Run De-light first.');
+        return;
+      }
+      const latest = images[images.length - 1];
+      const imgUrl = `/api/workspaces/${encodeURIComponent(state.workspace.name)}/stages/4/images/${encodeURIComponent(latest)}`;
+      const imgRes = await fetch(imgUrl);
+      const blob = await imgRes.blob();
+      const file = new File([blob], latest, { type: blob.type });
+      state.s5SourceImage = file;
+      const preview = $('#s5Preview');
+      preview.src = URL.createObjectURL(blob);
+      preview.style.display = 'block';
+      $('#s5Upload').classList.add('has-image');
+      _s5LoadSourceImage(file);
+    } catch (err) {
+      alert(`Error loading stage 4 images: ${err.message}`);
+    }
+  });
+
+  // Live preview: update when sliders change
+  const threshSlider = $('#s5Thresh');
+  const featherSlider = $('#s5Feather');
+
+  const debouncedUpdate = () => {
+    if (!$('#s5LivePreview').checked) return;
+    if (_s5RafId) cancelAnimationFrame(_s5RafId);
+    _s5RafId = requestAnimationFrame(() => {
+      _s5ProcessAndPreview();
+      _s5RafId = null;
+    });
+  };
+
+  threshSlider.addEventListener('input', debouncedUpdate);
+  featherSlider.addEventListener('input', debouncedUpdate);
+
+  // Remove Background button
+  $('#btnRemoveBg').addEventListener('click', () => {
+    if (!state.s5OriginalImageData) {
+      alert('Please load a source image first.');
+      return;
+    }
+    _s5ProcessAndPreview();
+  });
+
+  // Export PNG button
+  $('#btnExportPng').addEventListener('click', async () => {
+    if (!state.s5ProcessedCanvas) {
+      alert('Process an image first (click "Remove Background").');
+      return;
+    }
+    if (!state.workspace) return;
+
+    try {
+      // Convert canvas to blob
+      const blob = await new Promise((resolve) => {
+        state.s5ProcessedCanvas.toBlob(resolve, 'image/png');
+      });
+
+      const formData = new FormData();
+      formData.append('workspace', state.workspace.name);
+      formData.append('image', blob, `bg_removed_${Date.now()}.png`);
+      formData.append('threshold', $('#s5Thresh').value);
+      formData.append('feather', $('#s5Feather').value);
+
+      const res = await fetch('/api/export-alpha', { method: 'POST', body: formData });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.detail || 'Export failed');
+      }
+
+      const data = await res.json();
+
+      // Reload gallery
+      await loadStageGallery(5);
+
+      // Also trigger a browser download
+      const a = document.createElement('a');
+      a.href = `/api/workspaces/${encodeURIComponent(state.workspace.name)}/stages/5/images/${encodeURIComponent(data.filename)}`;
+      a.download = data.filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    } catch (err) {
+      alert(`Export error: ${err.message}`);
+    }
+  });
+}
+
+/**
+ * Load a source image File into pixel data for canvas processing.
+ */
+function _s5LoadSourceImage(file) {
+  const img = new Image();
+  img.onload = () => {
+    // Create offscreen canvas with original dimensions
+    const canvas = document.createElement('canvas');
+    canvas.width = img.naturalWidth;
+    canvas.height = img.naturalHeight;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(img, 0, 0);
+    state.s5OriginalImageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+
+    // Trigger initial preview if live preview is on
+    if ($('#s5LivePreview').checked) {
+      _s5ProcessAndPreview();
+    }
+    URL.revokeObjectURL(img.src);
+  };
+  img.src = URL.createObjectURL(file);
+}
+
+/**
+ * Process the source image with threshold + feather and show in gallery.
+ */
+function _s5ProcessAndPreview() {
+  const originalData = state.s5OriginalImageData;
+  if (!originalData) return;
+
+  const threshold = parseInt($('#s5Thresh').value);
+  const feather = parseInt($('#s5Feather').value);
+  const w = originalData.width;
+  const h = originalData.height;
+
+  // Create working canvas
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext('2d');
+
+  // Copy original data
+  const newData = ctx.createImageData(w, h);
+  const src = originalData.data;
+  const dst = newData.data;
+
+  // Step 1: Compute alpha based on threshold
+  // For feathering, we first compute a "whiteness distance" then apply feather gradient
+  const alphaMap = new Float32Array(w * h);
+
+  for (let i = 0; i < w * h; i++) {
+    const idx = i * 4;
+    const r = src[idx];
+    const g = src[idx + 1];
+    const b = src[idx + 2];
+
+    // All channels must be >= threshold to be considered white
+    const minChannel = Math.min(r, g, b);
+
+    if (minChannel >= threshold) {
+      alphaMap[i] = 0; // fully transparent
+    } else if (feather > 0 && minChannel >= threshold - feather * 8) {
+      // Feather zone: gradual transparency
+      const dist = threshold - minChannel;
+      const featherRange = feather * 8;
+      alphaMap[i] = Math.min(1.0, dist / featherRange);
+    } else {
+      alphaMap[i] = 1.0; // fully opaque
+    }
+  }
+
+  // Step 2: Optional spatial feather (simple box blur on alpha)
+  let finalAlpha = alphaMap;
+  if (feather > 0) {
+    finalAlpha = _s5BlurAlpha(alphaMap, w, h, feather);
+  }
+
+  // Step 3: Write pixels
+  for (let i = 0; i < w * h; i++) {
+    const idx = i * 4;
+    dst[idx] = src[idx];
+    dst[idx + 1] = src[idx + 1];
+    dst[idx + 2] = src[idx + 2];
+    dst[idx + 3] = Math.round(finalAlpha[i] * 255);
+  }
+
+  ctx.putImageData(newData, 0, 0);
+  state.s5ProcessedCanvas = canvas;
+
+  // Update the gallery area with the preview
+  _s5ShowPreview(canvas, threshold, feather);
+}
+
+/**
+ * Simple box blur on the alpha channel for edge feathering.
+ */
+function _s5BlurAlpha(alpha, w, h, radius) {
+  const result = new Float32Array(w * h);
+  const r = Math.max(1, radius);
+
+  // Horizontal pass
+  const temp = new Float32Array(w * h);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      let sum = 0;
+      let count = 0;
+      for (let dx = -r; dx <= r; dx++) {
+        const nx = x + dx;
+        if (nx >= 0 && nx < w) {
+          sum += alpha[y * w + nx];
+          count++;
+        }
+      }
+      temp[y * w + x] = sum / count;
+    }
+  }
+
+  // Vertical pass
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      let sum = 0;
+      let count = 0;
+      for (let dy = -r; dy <= r; dy++) {
+        const ny = y + dy;
+        if (ny >= 0 && ny < h) {
+          sum += temp[ny * w + x];
+          count++;
+        }
+      }
+      result[y * w + x] = sum / count;
+    }
+  }
+
+  return result;
+}
+
+/**
+ * Show the processed canvas in the gallery area with checkerboard background.
+ */
+function _s5ShowPreview(canvas, threshold, feather) {
+  const grid = $('#galleryGrid');
+
+  // Count transparent pixels for info
+  const ctx = canvas.getContext('2d');
+  const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+  let transparent = 0;
+  let semiTransparent = 0;
+  for (let i = 3; i < data.length; i += 4) {
+    if (data[i] === 0) transparent++;
+    else if (data[i] < 255) semiTransparent++;
+  }
+  const totalPixels = canvas.width * canvas.height;
+  const pctRemoved = ((transparent / totalPixels) * 100).toFixed(1);
+
+  grid.innerHTML = `
+    <div class="s5-live-preview" style="grid-column: 1 / -1;">
+      <div class="s5-preview-canvas-wrap">
+        <canvas id="s5ResultCanvas" width="${canvas.width}" height="${canvas.height}"></canvas>
+      </div>
+      <div class="s5-preview-info">
+        ${canvas.width}×${canvas.height} · threshold: ${threshold} · feather: ${feather}px
+        · ${pctRemoved}% removed · ${semiTransparent} semi-transparent pixels
+      </div>
+    </div>
+  `;
+
+  // Draw the processed canvas
+  const displayCanvas = document.getElementById('s5ResultCanvas');
+  const displayCtx = displayCanvas.getContext('2d');
+  displayCtx.drawImage(canvas, 0, 0);
 }

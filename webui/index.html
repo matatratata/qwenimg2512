@@ -69,6 +69,10 @@
             <span class="stage-num">04</span>
             <span>DLT</span>
           </button>
+          <button class="stage-tab" data-stage="5" title="Remove white background">
+            <span class="stage-num">05</span>
+            <span>BG</span>
+          </button>
         </nav>
 
         <!-- Left Panel -->
@@ -590,6 +594,93 @@
                 </svg>
               </button>
               <div class="history-list" id="historyList4"></div>
+            </div>
+          </div>
+
+          <!-- ===== Stage 05: Remove Background ===== -->
+          <div class="stage-content" data-stage="5">
+            <div class="panel-scroll">
+              <h3 class="panel-title">Stage 05 — Remove Background</h3>
+
+              <!-- Ref Image -->
+              <div class="form-group">
+                <label>Source Image (from Stage 04)</label>
+                <div class="upload-zone upload-zone-sm" id="s5Upload">
+                  <input type="file" id="s5FileInput" accept="image/*" hidden />
+                  <div class="upload-placeholder">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"
+                      opacity="0.4">
+                      <rect x="3" y="3" width="18" height="18" rx="2" />
+                      <circle cx="8.5" cy="8.5" r="1.5" />
+                      <polyline points="21 15 16 10 5 21" />
+                    </svg>
+                    <p>Drop image or <span class="accent-link">browse</span></p>
+                  </div>
+                  <img id="s5Preview" class="upload-preview" alt="Source" />
+                </div>
+                <button class="btn-use-result" id="btnUseStage4" style="margin-top:8px">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M5 12h14" />
+                    <path d="M12 5l7 7-7 7" />
+                  </svg>
+                  Use Stage 04 Result
+                </button>
+              </div>
+
+              <!-- White Threshold -->
+              <div class="form-group">
+                <label>White Threshold <span class="slider-val" id="s5ThreshVal">240</span></label>
+                <div class="slider-row">
+                  <input type="range" id="s5Thresh" min="100" max="255" step="1" value="240" />
+                </div>
+                <p class="form-hint">Pixels with R, G, B ≥ threshold become transparent</p>
+              </div>
+
+              <!-- Feather -->
+              <div class="form-group">
+                <label>Edge Feather <span class="slider-val" id="s5FeatherVal">2</span>px</label>
+                <div class="slider-row">
+                  <input type="range" id="s5Feather" min="0" max="10" step="1" value="2" />
+                </div>
+                <p class="form-hint">Soften edges for smoother transparency transitions</p>
+              </div>
+
+              <!-- Live preview toggle -->
+              <div class="form-group">
+                <label class="checkbox-label">
+                  <input type="checkbox" id="s5LivePreview" checked />
+                  Live Preview
+                </label>
+              </div>
+
+              <button class="btn-primary" id="btnRemoveBg">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <rect x="3" y="3" width="18" height="18" rx="2" />
+                  <path d="M9 3v18" />
+                  <path d="M3 9h18" />
+                </svg>
+                Remove Background
+              </button>
+
+              <button class="btn-secondary" id="btnExportPng" style="margin-top:12px;width:100%;justify-content:center">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" />
+                  <polyline points="7 10 12 15 17 10" />
+                  <line x1="12" y1="15" x2="12" y2="3" />
+                </svg>
+                Export PNG with Alpha
+              </button>
+            </div>
+
+            <!-- History -->
+            <div class="history-panel" id="historyPanel5">
+              <button class="history-toggle" id="historyToggle5">
+                <span>History</span>
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <polyline points="6 9 12 15 18 9" />
+                </svg>
+              </button>
+              <div class="history-list" id="historyList5"></div>
             </div>
           </div>
         </aside>

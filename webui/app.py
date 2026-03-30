@@ -14,6 +14,7 @@ import sys
 import uuid
 from datetime import datetime
 from pathlib import Path
+import gc
 import time
 from typing import Optional
 
@@ -67,6 +68,112 @@ gpu_lock = asyncio.Lock()
 
 # Progress tracking
 progress_store: dict = {}
+
+
+def _cleanup_worker(worker, label: str = "") -> None:
+    """Ensure GPU memory is freed after every generation.
+
+    The PySide workers have a ``run()`` → ``finally: self._cleanup()`` flow,
+    but the WebUI calls ``_run_generation()`` directly, bypassing cleanup.
+    This function must be called in a ``finally`` block in every runner.
+    """
+    import torch
+
+    logger.info("[cleanup:%s] Releasing worker resources...", label)
+
+    # 1. Call the worker's own cleanup (deletes self._pipe, etc.)
+    try:
+        worker._cleanup()
+    except Exception as exc:
+        logger.warning("[cleanup:%s] worker._cleanup failed: %s", label, exc)
+
+    # 2. Forcefully drop all references the worker might still hold
+    for attr in ("_pipe", "_cn_hooks", "_cn_state"):
+        if hasattr(worker, attr):
+            try:
+                setattr(worker, attr, None)
+            except Exception:
+                pass
+
+    # 3. Evict global caches that the worker may have populated
+    #    (PySide workers intentionally preserve caches for repeat runs,
+    #    but in the WebUI we must free them to avoid cross-stage OOM)
+    _pre_generation_gc()
+
+
+def _pre_generation_gc() -> None:
+    """Evict ALL global model caches and free GPU memory before generation.
+
+    The PySide workers cache pipelines across runs via module-level
+    ``_GLOBAL_CACHE`` singletons.  In the desktop app this saves reload time
+    when repeating the same stage, but in the WebUI switching between stages
+    (e.g. Stage 01 → Stage 03) means a *different* pipeline class needs the
+    GPU.  The old pipeline stays pinned by its cache → OOM.
+
+    We must clear every cache before each request.
+    """
+    import torch
+
+    # ── 1. Clear GenerationWorker cache (worker.py — Stage 01) ────────────
+    try:
+        from qwenimg2512.worker import _GLOBAL_CACHE as gen_cache
+        if gen_cache.pipe is not None:
+            logger.info("[pre-gc] Evicting GenerationWorker cache (Stage 01 pipeline)")
+            # Remove accelerate/cpu-offload hooks so .to("cpu") works
+            try:
+                gen_cache.pipe.remove_all_hooks()
+            except Exception:
+                pass
+            del gen_cache.pipe
+            gen_cache.pipe = None
+            gen_cache.model_variant = None
+            gen_cache.gguf_path = None
+            gen_cache.base_model = None
+            gen_cache.lora_path = None
+            gen_cache.lora_adapter_names = []
+    except ImportError:
+        pass
+    except Exception as exc:
+        logger.warning("[pre-gc] Failed to clear GenerationWorker cache: %s", exc)
+
+    # ── 2. Clear Edit2509Worker cache (edit_2509_worker.py — Stage 02) ────
+    try:
+        from qwenimg2512.edit_2509_worker import _GLOBAL_CACHE as edit2509_cache
+        has_te = edit2509_cache.text_encoder is not None
+        has_tr = edit2509_cache.transformer is not None
+        if has_te or has_tr:
+            logger.info("[pre-gc] Evicting Edit2509Worker cache (Stage 02 pipeline)")
+            if has_te:
+                del edit2509_cache.text_encoder
+                edit2509_cache.text_encoder = None
+            edit2509_cache.processor = None
+            edit2509_cache.tokenizer = None
+            edit2509_cache.encoder_device = None
+            if has_tr:
+                del edit2509_cache.transformer
+                edit2509_cache.transformer = None
+            if edit2509_cache.vae is not None:
+                del edit2509_cache.vae
+                edit2509_cache.vae = None
+            edit2509_cache.scheduler = None
+            edit2509_cache.base_model_path = None
+            edit2509_cache.active_loras = set()
+    except ImportError:
+        pass
+    except Exception as exc:
+        logger.warning("[pre-gc] Failed to clear Edit2509Worker cache: %s", exc)
+
+    # ── 3. GC + CUDA cache flush ─────────────────────────────────────────
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        for i in range(torch.cuda.device_count()):
+            alloc = torch.cuda.memory_allocated(i) / 1024**3
+            free, total = torch.cuda.mem_get_info(i)
+            logger.info(
+                "[pre-gc] cuda:%d alloc=%.2fGB free=%.2fGB/%.2fGB",
+                i, alloc, free / 1024**3, total / 1024**3,
+            )
 
 # ---------------------------------------------------------------------------
 # App
@@ -437,6 +544,7 @@ def _run_generate(
     import torch
     from qwenimg2512.config import ASPECT_RATIOS, GenerationSettings, ModelPaths, Config
 
+    _pre_generation_gc()
     config = Config.load()
 
     settings = GenerationSettings(
@@ -465,7 +573,10 @@ def _run_generate(
     worker._is_cancelled = False
     _connect_worker_progress(worker, task_id)
 
-    worker._run_generation()
+    try:
+        worker._run_generation()
+    finally:
+        _cleanup_worker(worker, "stage01-generate")
 
     # Find the output file (most recent in output_dir)
     output_path = Path(output_dir)
@@ -560,6 +671,7 @@ def _run_edit(
     from PIL import Image
     from qwenimg2512.config import ASPECT_RATIOS, Edit2509Settings, Config
 
+    _pre_generation_gc()
     config = Config.load()
 
     # Create a white image for Picture 2 — always regenerate to match aspect ratio
@@ -597,9 +709,9 @@ def _run_edit(
         lora_scale_end_2=1.0,
         lora_step_start_2=0,
         lora_step_end_2=-1,
-        ffn_chunk_size=0,
+        ffn_chunk_size=2048,
         blocks_to_swap=0,
-        attn_chunk_size=0,
+        attn_chunk_size=4096,
     )
 
     logger.info(f"Edit settings: ref1={settings.ref_image_1}, ref2={settings.ref_image_2}, ref3={settings.ref_image_3}")
@@ -610,7 +722,10 @@ def _run_edit(
     worker._is_cancelled = False
     _connect_worker_progress(worker, task_id)
 
-    worker._run_generation()
+    try:
+        worker._run_generation()
+    finally:
+        _cleanup_worker(worker, "stage02-edit")
 
     # Find the output file
     output_path = Path(output_dir)
@@ -806,20 +921,24 @@ def _run_edit2511(
         ref_strength_1=1.0,
         ref_strength_2=1.0,
         ref_strength_3=0.15,
-        ffn_chunk_size=0,
+        ffn_chunk_size=2048,
         blocks_to_swap=0,
-        attn_chunk_size=0,
+        attn_chunk_size=4096,
     )
 
     logger.info(f"Edit2511 settings: ref1={settings.ref_image_1}, lora1={settings.lora_path}, lora2={settings.lora_path_2}")
 
     from qwenimg2512.edit_worker import EditWorker
 
+    _pre_generation_gc()
     worker = EditWorker(settings, config.model_paths)
     worker._is_cancelled = False
     _connect_worker_progress(worker, task_id)
 
-    worker._run_generation()
+    try:
+        worker._run_generation()
+    finally:
+        _cleanup_worker(worker, "edit2511")
 
     # Find the output file
     output_path = Path(output_dir)
@@ -834,6 +953,40 @@ def _run_edit2511(
         raise RuntimeError("No output image produced")
 
     return str(images[0])
+
+
+# ---------------------------------------------------------------------------
+# API: Export Alpha (Stage 05) — save PNG with transparency
+# ---------------------------------------------------------------------------
+@app.post("/api/export-alpha")
+async def export_alpha(
+    workspace: str = Form(...),
+    image: UploadFile = File(...),
+    threshold: int = Form(240),
+    feather: int = Form(2),
+):
+    """Save a PNG with alpha channel to stage_05."""
+    stage_dir = get_stage_dir(workspace, 5)
+
+    # Generate filename
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"alpha_{timestamp}_{uuid.uuid4().hex[:6]}.png"
+    filepath = stage_dir / filename
+
+    # Save the upload
+    content = await image.read()
+    filepath.write_bytes(content)
+
+    logger.info(f"Exported alpha PNG: {filepath} ({len(content)} bytes)")
+
+    # Save history entry
+    save_history_entry(workspace, 5, {
+        "threshold": threshold,
+        "feather": feather,
+        "prompt": f"BG removed (threshold={threshold}, feather={feather}px)",
+    }, filename)
+
+    return {"filename": filename, "path": str(filepath)}
 
 
 # ---------------------------------------------------------------------------
