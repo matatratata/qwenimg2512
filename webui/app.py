@@ -379,7 +379,7 @@ async def create_workspace(body: dict):
 
     ws_dir.mkdir(parents=True)
     # Pre-create stage directories
-    for stage in [1, 2, 3, 4]:
+    for stage in [1, 2, 3, 4, 5]:
         (ws_dir / f"stage_{stage:02d}").mkdir()
 
     return {"name": name, "path": str(ws_dir), "image_count": 0, "thumbnail": False}
@@ -436,6 +436,35 @@ async def get_stage_image(name: str, stage: int, filename: str):
 
 
 # ---------------------------------------------------------------------------
+# API: Model References
+# ---------------------------------------------------------------------------
+@app.get("/api/model_references")
+async def list_model_references():
+    """List images in the shared model_reference folder in the workspace root."""
+    ref_dir = _get_workspace_root() / "model_reference"
+    if not ref_dir.exists():
+        return {"images": []}
+        
+    images = sorted(
+        [f.name for f in ref_dir.iterdir()
+         if f.is_file() and f.suffix.lower() in ('.png', '.jpg', '.jpeg', '.webp')],
+        key=lambda x: (ref_dir / x).stat().st_mtime,
+        reverse=True
+    )
+    return {"images": images}
+
+
+@app.get("/api/model_references/{filename}")
+async def get_model_reference(filename: str):
+    """Serve a specific model reference image."""
+    ref_dir = _get_workspace_root() / "model_reference"
+    filepath = ref_dir / filename
+    if not filepath.exists() or not filepath.is_file():
+        raise HTTPException(404)
+    return FileResponse(str(filepath))
+
+
+# ---------------------------------------------------------------------------
 # API: History
 # ---------------------------------------------------------------------------
 @app.get("/api/workspaces/{name}/history")
@@ -458,7 +487,162 @@ async def get_history(name: str, stage: Optional[int] = None):
 
 
 # ---------------------------------------------------------------------------
-# API: Generate (Stage 01)
+# API: Model Shape (Stage 01) — Edit 2511 with white BG as Picture 1
+# ---------------------------------------------------------------------------
+@app.post("/api/model")
+async def model_shape(
+    workspace: str = Form(...),
+    prompt: str = Form("Create 3D model image of  modern  neo-tokyo  urban  building  in Picture 1 that is loosely inspired by modern neo-tokyo building from  Picture 2.  White background"),
+    aspect_ratio: str = Form("9:16 Half (480x832)"),
+    sampler_name: str = Form("res_2s"),
+    schedule_name: str = Form("beta57"),
+    num_inference_steps: int = Form(16),
+    seed: int = Form(-1),
+    lora_path: str = Form(""),
+    lora_scale: float = Form(0.6),
+    ref_strength_2: float = Form(0.16),
+    ref_image_2: UploadFile = File(...),
+):
+    """Run Stage 01: Generate 3D model shape from style reference.
+
+    Picture 1 = auto-generated white background.
+    Picture 2 = user-provided style reference (low strength).
+    """
+    task_id = str(uuid.uuid4())
+    stage_dir = get_stage_dir(workspace, 1)
+
+    # Save style ref image
+    ref2_path = stage_dir / f".ref2_{uuid.uuid4().hex[:8]}.png"
+    data = await ref_image_2.read()
+    ref2_path.write_bytes(data)
+
+    actual_seed = seed if seed >= 0 else random.randint(0, 2**32 - 1)
+
+    params = {
+        "prompt": prompt,
+        "aspect_ratio": aspect_ratio,
+        "sampler_name": sampler_name,
+        "schedule_name": schedule_name,
+        "num_inference_steps": num_inference_steps,
+        "seed": actual_seed,
+        "lora_path": lora_path,
+        "lora_scale": lora_scale,
+        "ref_strength_2": ref_strength_2,
+    }
+
+    async with gpu_lock:
+        _init_progress(task_id)
+        try:
+            output_path = await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: _run_model_shape(
+                    task_id=task_id,
+                    output_dir=str(stage_dir),
+                    ref2_image_path=str(ref2_path),
+                    **params,
+                ),
+            )
+        except Exception as e:
+            progress_store[task_id] = {"done": True, "error": str(e)}
+            logger.exception("Model shape failed")
+            raise HTTPException(500, str(e))
+
+    progress_store[task_id] = {"done": True, "stage": "Complete!", "step": num_inference_steps, "total": num_inference_steps}
+    filename = Path(output_path).name
+    save_history_entry(workspace, 1, params, filename)
+    return {"task_id": task_id, "filename": filename, "path": output_path, "seed": actual_seed}
+
+
+def _run_model_shape(
+    task_id: str,
+    output_dir: str,
+    ref2_image_path: str,
+    prompt: str,
+    aspect_ratio: str,
+    sampler_name: str,
+    schedule_name: str,
+    num_inference_steps: int,
+    seed: int,
+    lora_path: str = "",
+    lora_scale: float = 0.6,
+    ref_strength_2: float = 0.16,
+) -> str:
+    """Stage 01: Edit 2511 with white BG as Picture 1 + style ref as Picture 2."""
+    from PIL import Image
+    from qwenimg2512.config import ASPECT_RATIOS, EditSettings, Config
+
+    _pre_generation_gc()
+    config = Config.load()
+
+    # Create white image for Picture 1
+    width, height = ASPECT_RATIOS.get(aspect_ratio, (480, 832))
+    white_path = Path(output_dir) / ".white_bg.png"
+    white_img = Image.new("RGB", (width, height), (255, 255, 255))
+    white_img.save(str(white_path))
+    logger.info(f"White BG (Picture 1): {white_path} ({width}x{height})")
+
+    settings = EditSettings(
+        prompt=prompt,
+        negative_prompt="",
+        aspect_ratio=aspect_ratio,
+        num_inference_steps=num_inference_steps,
+        true_cfg_scale=1.0,
+        guidance_scale=1.0,
+        seed=seed,
+        output_dir=output_dir,
+        sampler_name=sampler_name,
+        schedule_name=schedule_name,
+        ref_image_1=str(white_path),
+        ref_image_2=ref2_image_path,
+        ref_image_3="",
+        ref_fit_mode_1="cover",
+        ref_fit_mode_2="cover",
+        ref_fit_mode_3="stretch",
+        lora_path=lora_path,
+        lora_scale_start=lora_scale,
+        lora_scale_end=lora_scale,
+        lora_step_start=0,
+        lora_step_end=-1,
+        lora_path_2="",
+        lora_scale_start_2=1.0,
+        lora_scale_end_2=1.0,
+        lora_step_start_2=0,
+        lora_step_end_2=-1,
+        ref_strength_1=1.0,
+        ref_strength_2=ref_strength_2,
+        ref_strength_3=0.2,
+        ffn_chunk_size=2048,
+        blocks_to_swap=0,
+        attn_chunk_size=4096,
+    )
+
+    logger.info(f"Model shape: ref1(white)={settings.ref_image_1}, ref2={settings.ref_image_2}, str2={ref_strength_2}")
+
+    from qwenimg2512.edit_worker import EditWorker
+
+    worker = EditWorker(settings, config.model_paths)
+    worker._is_cancelled = False
+    _connect_worker_progress(worker, task_id)
+
+    try:
+        worker._run_generation()
+    finally:
+        _cleanup_worker(worker, "stage01-model")
+
+    output_path = Path(output_dir)
+    images = sorted(
+        [f for f in output_path.iterdir()
+         if f.suffix == '.png' and not f.name.startswith('.')],
+        key=lambda f: f.stat().st_mtime,
+        reverse=True,
+    )
+    if not images:
+        raise RuntimeError("No output image produced")
+    return str(images[0])
+
+
+# ---------------------------------------------------------------------------
+# API: Generate (Stage 02)
 # ---------------------------------------------------------------------------
 @app.post("/api/generate")
 async def generate(
@@ -474,9 +658,9 @@ async def generate(
     seed: int = Form(-1),
     control_image: Optional[UploadFile] = File(None),
 ):
-    """Run Stage 01 generation: Qwen 2512 + ControlNet."""
+    """Run Stage 02 generation: Qwen 2512 + ControlNet."""
     task_id = str(uuid.uuid4())
-    stage_dir = get_stage_dir(workspace, 1)
+    stage_dir = get_stage_dir(workspace, 2)
 
     # Save control image if provided
     control_image_path = ""
@@ -522,7 +706,7 @@ async def generate(
     # Include control image in history so we can preview it
     if control_image_path:
         params["control_image"] = Path(control_image_path).name
-    save_history_entry(workspace, 1, params, filename)
+    save_history_entry(workspace, 2, params, filename)
     return {"task_id": task_id, "filename": filename, "path": output_path, "seed": actual_seed}
 
 
@@ -594,7 +778,7 @@ def _run_generate(
 
 
 # ---------------------------------------------------------------------------
-# API: Edit (Stage 02)
+# API: Edit (Stage 03)
 # ---------------------------------------------------------------------------
 @app.post("/api/edit")
 async def edit(
@@ -609,9 +793,9 @@ async def edit(
     lora_scale: float = Form(0.6),
     ref_image_1: UploadFile = File(...),
 ):
-    """Run Stage 02 edit: Qwen 2511 + LoRA + white bg."""
+    """Run Stage 03 edit: Qwen 2511 + LoRA + white bg."""
     task_id = str(uuid.uuid4())
-    stage_dir = get_stage_dir(workspace, 2)
+    stage_dir = get_stage_dir(workspace, 3)
 
     # Save ref image to temp
     ref_path = stage_dir / f".ref_{uuid.uuid4().hex[:8]}.png"
@@ -650,7 +834,7 @@ async def edit(
 
     progress_store[task_id] = {"done": True, "stage": "Complete!", "step": num_inference_steps, "total": num_inference_steps}
     filename = Path(output_path).name
-    save_history_entry(workspace, 2, params, filename)
+    save_history_entry(workspace, 3, params, filename)
     return {"task_id": task_id, "filename": filename, "path": output_path, "seed": actual_seed}
 
 
@@ -743,73 +927,12 @@ def _run_edit(
 
 
 # ---------------------------------------------------------------------------
-# API: 3D Prep (Stage 03) — Edit 2511
-# ---------------------------------------------------------------------------
-@app.post("/api/prep3d")
-async def prep3d(
-    workspace: str = Form(...),
-    prompt: str = Form("Prepare detailed damaged building for 3D mesh. grey material. Remove loose clutter."),
-    aspect_ratio: str = Form("9:16 (960x1664)"),
-    sampler_name: str = Form("res_2s"),
-    schedule_name: str = Form("beta57"),
-    num_inference_steps: int = Form(21),
-    seed: int = Form(-1),
-    lora_path: str = Form(""),
-    lora_scale: float = Form(0.6),
-    ref_image_1: UploadFile = File(...),
-):
-    """Run Stage 03: 3D mesh prep using Edit 2511 + Lightning LoRA."""
-    task_id = str(uuid.uuid4())
-    stage_dir = get_stage_dir(workspace, 3)
-
-    # Save ref image
-    ref_path = stage_dir / f".ref_{uuid.uuid4().hex[:8]}.png"
-    data = await ref_image_1.read()
-    ref_path.write_bytes(data)
-
-    actual_seed = seed if seed >= 0 else random.randint(0, 2**32 - 1)
-
-    params = {
-        "prompt": prompt,
-        "aspect_ratio": aspect_ratio,
-        "sampler_name": sampler_name,
-        "schedule_name": schedule_name,
-        "num_inference_steps": num_inference_steps,
-        "seed": actual_seed,
-        "lora_path": lora_path,
-        "lora_scale": lora_scale,
-    }
-
-    async with gpu_lock:
-        _init_progress(task_id)
-        try:
-            output_path = await asyncio.get_event_loop().run_in_executor(
-                None,
-                lambda: _run_edit2511(
-                    task_id=task_id,
-                    output_dir=str(stage_dir),
-                    ref_image_path=str(ref_path),
-                    **params,
-                ),
-            )
-        except Exception as e:
-            progress_store[task_id] = {"done": True, "error": str(e)}
-            logger.exception("3D Prep failed")
-            raise HTTPException(500, str(e))
-
-    progress_store[task_id] = {"done": True, "stage": "Complete!", "step": num_inference_steps, "total": num_inference_steps}
-    filename = Path(output_path).name
-    save_history_entry(workspace, 3, params, filename)
-    return {"task_id": task_id, "filename": filename, "path": output_path, "seed": actual_seed}
-
-
-# ---------------------------------------------------------------------------
 # API: De-light (Stage 04) — Edit 2511 + Dual LoRA
 # ---------------------------------------------------------------------------
 @app.post("/api/delight")
 async def delight(
     workspace: str = Form(...),
-    prompt: str = Form("移除光影,使用柔和光线（无明显光斑和阴影）对图片进行重新照明"),
+    prompt: str = Form("移除光影,使用柔和光线（无明显光斑和阴影）对图片进行重新照明. Keep building dark grey  for better contrast with the white background."),
     aspect_ratio: str = Form("9:16 (960x1664)"),
     sampler_name: str = Form("res_2s"),
     schedule_name: str = Form("beta57"),
@@ -869,7 +992,7 @@ async def delight(
 
 
 # ---------------------------------------------------------------------------
-# Shared: Edit 2511 runner (used by Stage 03 and Stage 04)
+# Shared: Edit 2511 runner (used by Stage 04)
 # ---------------------------------------------------------------------------
 def _run_edit2511(
     task_id: str,
@@ -886,7 +1009,7 @@ def _run_edit2511(
     lora_path_2: str = "",
     lora_scale_2: float = 1.0,
 ) -> str:
-    """Synchronous Edit 2511 generation — shared by Stage 03 (3D Prep) and Stage 04 (De-light)."""
+    """Synchronous Edit 2511 generation — used by Stage 04 (De-light)."""
     from qwenimg2512.config import EditSettings, Config
 
     config = Config.load()
@@ -987,6 +1110,259 @@ async def export_alpha(
     }, filename)
 
     return {"filename": filename, "path": str(filepath)}
+
+
+# ---------------------------------------------------------------------------
+# API: StableGen Integration — Direct Pipeline Bridge
+# ---------------------------------------------------------------------------
+STABLEGEN_TEMP = WEBUI_DIR / ".stablegen_tmp"
+STABLEGEN_TEMP.mkdir(parents=True, exist_ok=True)
+
+# Lightning LoRA for fast 2511 edits (8-step variant)
+_LIGHTNING_LORA_2511 = str(
+    Path.home() / "AI" / "Models" / "LORAS" / "2511"
+    / "Qwen-Image-Edit-2511-Lightning-8steps-V1.0-bf16.safetensors"
+)
+
+
+def _closest_aspect_ratio(width: int, height: int) -> str:
+    """Find the ASPECT_RATIOS key whose pixel dimensions are closest to (width, height)."""
+    from qwenimg2512.config import ASPECT_RATIOS
+
+    target_ratio = width / height
+    best_key = "1:1 (1344x1344)"
+    best_diff = float("inf")
+
+    for key, (w, h) in ASPECT_RATIOS.items():
+        diff = abs(w / h - target_ratio) + abs(w * h - width * height) / 1e6
+        if diff < best_diff:
+            best_diff = diff
+            best_key = key
+    return best_key
+
+
+@app.get("/api/stablegen/status")
+async def stablegen_status():
+    """Health-check endpoint for StableGen to verify server availability."""
+    import torch
+
+    gpu_info = {}
+    if torch.cuda.is_available():
+        for i in range(torch.cuda.device_count()):
+            free, total = torch.cuda.mem_get_info(i)
+            gpu_info[f"gpu{i}"] = {
+                "free_gb": round(free / 1024**3, 2),
+                "total_gb": round(total / 1024**3, 2),
+            }
+    return {
+        "status": "ok",
+        "pipeline": "qwen_edit_2511",
+        "lora": _LIGHTNING_LORA_2511,
+        "lora_available": Path(_LIGHTNING_LORA_2511).exists(),
+        "gpu": gpu_info,
+    }
+
+
+@app.post("/api/stablegen/edit")
+async def stablegen_edit(
+    prompt: str = Form(...),
+    image1: UploadFile = File(...),
+    image2: Optional[UploadFile] = File(None),
+    image3: Optional[UploadFile] = File(None),
+    seed: int = Form(-1),
+    steps: int = Form(16),
+    lora_scale: float = Form(0.6),
+    ref_strength_2: float = Form(1.0),
+):
+    """StableGen integration endpoint — runs Edit 2511 + Lightning LoRA.
+
+    Accepts:
+        image1: Structure / guidance image (required)
+        image2: Style reference image (optional)
+        image3: Context render image (optional)
+        prompt: Edit prompt text
+        seed:   Random seed (-1 = random)
+        steps:  Inference steps (default 16)
+        lora_scale: Lightning LoRA strength (default 0.6)
+
+    Returns: Raw PNG image bytes.
+    """
+    task_id = str(uuid.uuid4())
+
+    # Save uploaded images
+    img1_path = STABLEGEN_TEMP / f"{task_id}_img1.png"
+    img1_data = await image1.read()
+    img1_path.write_bytes(img1_data)
+
+    img2_path = ""
+    if image2:
+        img2_path = str(STABLEGEN_TEMP / f"{task_id}_img2.png")
+        img2_data = await image2.read()
+        Path(img2_path).write_bytes(img2_data)
+
+    img3_path = ""
+    if image3:
+        img3_path = str(STABLEGEN_TEMP / f"{task_id}_img3.png")
+        img3_data = await image3.read()
+        Path(img3_path).write_bytes(img3_data)
+
+    actual_seed = seed if seed >= 0 else random.randint(0, 2**32 - 1)
+
+    # Auto-detect aspect ratio from image1 dimensions
+    from PIL import Image as PILImage
+    with PILImage.open(str(img1_path)) as im:
+        w, h = im.size
+    aspect_ratio = _closest_aspect_ratio(w, h)
+    logger.info(
+        f"[StableGen] image1={w}x{h} → aspect={aspect_ratio}, "
+        f"seed={actual_seed}, steps={steps}, prompt={prompt[:80]!r}"
+    )
+
+    # Use output dir in stablegen temp
+    output_dir = str(STABLEGEN_TEMP)
+
+    # Determine Lightning LoRA path
+    lora_path = _LIGHTNING_LORA_2511 if Path(_LIGHTNING_LORA_2511).exists() else ""
+    if not lora_path:
+        logger.warning("[StableGen] Lightning LoRA not found, running without LoRA")
+
+    async with gpu_lock:
+        _init_progress(task_id)
+        try:
+            output_path = await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: _run_stablegen_edit(
+                    task_id=task_id,
+                    output_dir=output_dir,
+                    ref_image_path=str(img1_path),
+                    style_image_path=img2_path,
+                    context_image_path=img3_path,
+                    prompt=prompt,
+                    aspect_ratio=aspect_ratio,
+                    num_inference_steps=steps,
+                    seed=actual_seed,
+                    lora_path=lora_path,
+                    lora_scale=lora_scale,
+                    ref_strength_2=ref_strength_2,
+                ),
+            )
+        except Exception as e:
+            progress_store[task_id] = {"done": True, "error": str(e)}
+            logger.exception("[StableGen] Edit failed")
+            # Cleanup temp files
+            for p in (img1_path, img2_path, img3_path):
+                if p and Path(p).exists():
+                    Path(p).unlink(missing_ok=True)
+            raise HTTPException(500, str(e))
+
+    progress_store[task_id] = {"done": True, "stage": "Complete!"}
+
+    # Return the image as raw PNG bytes
+    result_path = Path(output_path)
+    if not result_path.exists():
+        raise HTTPException(500, "Output image not found")
+
+    result_bytes = result_path.read_bytes()
+
+    # Cleanup all temp files for this task
+    for f in STABLEGEN_TEMP.glob(f"{task_id}*"):
+        f.unlink(missing_ok=True)
+    result_path.unlink(missing_ok=True)
+
+    return StreamingResponse(
+        iter([result_bytes]),
+        media_type="image/png",
+        headers={"Content-Length": str(len(result_bytes))},
+    )
+
+
+def _run_stablegen_edit(
+    task_id: str,
+    output_dir: str,
+    ref_image_path: str,
+    style_image_path: str,
+    context_image_path: str,
+    prompt: str,
+    aspect_ratio: str,
+    num_inference_steps: int,
+    seed: int,
+    lora_path: str = "",
+    lora_scale: float = 0.6,
+    ref_strength_2: float = 1.0,
+) -> str:
+    """Run Edit 2511 inference for StableGen — with Lightning LoRA."""
+    from qwenimg2512.config import EditSettings, Config
+
+    config = Config.load()
+
+    settings = EditSettings(
+        prompt=prompt,
+        negative_prompt="",
+        aspect_ratio=aspect_ratio,
+        num_inference_steps=num_inference_steps,
+        true_cfg_scale=1.0,
+        guidance_scale=1.0,
+        seed=seed,
+        output_dir=output_dir,
+        sampler_name="res_2s",
+        schedule_name="beta57",
+        ref_image_1=ref_image_path,
+        ref_image_2=style_image_path,
+        ref_image_3=context_image_path,
+        ref_fit_mode_1="cover",
+        ref_fit_mode_2="cover",
+        ref_fit_mode_3="stretch",
+        lora_path=lora_path,
+        lora_scale_start=lora_scale,
+        lora_scale_end=lora_scale,
+        lora_step_start=0,
+        lora_step_end=-1,
+        lora_path_2="",
+        lora_scale_start_2=1.0,
+        lora_scale_end_2=1.0,
+        lora_step_start_2=0,
+        lora_step_end_2=-1,
+        ref_strength_1=1.0,
+        ref_strength_2=ref_strength_2,
+        ref_strength_3=0.15,
+        ffn_chunk_size=2048,
+        blocks_to_swap=0,
+        attn_chunk_size=4096,
+    )
+
+    logger.info(
+        f"[StableGen] Edit2511: ref1={settings.ref_image_1}, "
+        f"ref2={settings.ref_image_2 or 'none'}, "
+        f"ref3={settings.ref_image_3 or 'none'}, "
+        f"lora={settings.lora_path or 'none'}"
+    )
+
+    from qwenimg2512.edit_worker import EditWorker
+
+    _pre_generation_gc()
+    worker = EditWorker(settings, config.model_paths)
+    worker._is_cancelled = False
+    _connect_worker_progress(worker, task_id)
+
+    try:
+        worker._run_generation()
+    finally:
+        _cleanup_worker(worker, "stablegen-edit")
+
+    # Find the output file (most recent PNG in output_dir)
+    output_path = Path(output_dir)
+    images = sorted(
+        [f for f in output_path.iterdir()
+         if f.suffix == '.png' and not f.name.startswith('.')
+         and not f.name.startswith(task_id[:8])],  # Exclude our temp inputs
+        key=lambda f: f.stat().st_mtime,
+        reverse=True,
+    )
+
+    if not images:
+        raise RuntimeError("No output image produced")
+
+    return str(images[0])
 
 
 # ---------------------------------------------------------------------------

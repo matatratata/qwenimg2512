@@ -7,3 +7,5 @@ src/qwenimg2512/widgets/__pycache__
 src/qwenimg2512/samplers/__pycache__
 webui/__pycache__
 webui/node_modules
+blender_plugin/qwenbuild/__pycache__
+webui/.stablegen_tmp

@@ -1,0 +1,15 @@
+schema_version = "1.0.0"
+id = "qwenbuild"
+version = "0.1.0"
+name = "QwenBuild"
+tagline = "Viewport Multi-Pass Rendering & AO Texture Projection"
+maintainer = "QwenBuild <qwenbuild@local>"
+type = "add-on"
+blender_version_min = "4.2.0"
+
+tags = ["Material", "UV"]
+
+license = ["SPDX:GPL-3.0-or-later"]
+
+[permissions]
+files = "Saves rendered viewport passes to disk"

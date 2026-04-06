@@ -7,9 +7,9 @@ const state = {
   workspace: null,          // { name, path }
   activeStage: 1,
   generating: false,
-  controlImage: null,       // File
-  refImage1: null,          // File or { fromStage: url, filename }
-  s3RefImage: null,         // File — Stage 03 ref image
+  modelRefImage: null,      // File — Stage 01 style reference (Picture 2)
+  controlImage: null,       // File — Stage 02 control image
+  refImage1: null,          // File — Stage 03 ref image (Picture 1)
   s4RefImage: null,         // File — Stage 04 ref image
   s5SourceImage: null,      // File — Stage 05 source image
   s5OriginalImageData: null,// ImageData — original pixels for live reprocessing
@@ -31,10 +31,10 @@ function initAll() {
     ['initSliders', initSliders],
     ['initCollapsibles', initCollapsibles],
     ['initUploads', initUploads],
+    ['initModelButton', initModelButton],
+    ['initUseStage1ForControl', initUseStage1ForControl],
     ['initGenerateButton', initGenerateButton],
     ['initEditButton', initEditButton],
-    ['initUseStage1Button', initUseStage1Button],
-    ['initPrep3dButton', initPrep3dButton],
     ['initUseStage2Button', initUseStage2Button],
     ['initDelightButton', initDelightButton],
     ['initUseStage3Button', initUseStage3Button],
@@ -255,6 +255,8 @@ function setActiveStage(stage) {
   // Toggle checkerboard class for stage 5 gallery
   $('#galleryGrid').classList.toggle('stage-5-active', stage === 5);
 
+
+
   // Load gallery for this stage
   if (state.workspace) {
     loadStageGallery(stage);
@@ -267,13 +269,14 @@ function setActiveStage(stage) {
 // ============================================================
 function initSliders() {
   const bindings = [
+    ['modelRefStrength', 'modelRefStrengthVal'],
+    ['modelLoraScale', 'modelLoraScaleVal'],
+    ['modelSteps', 'modelStepsVal'],
     ['cnScale', 'cnScaleVal'],
     ['cfgScale', 'cfgScaleVal'],
     ['genSteps', 'stepsVal'],
     ['loraScale', 'loraScaleVal'],
     ['editSteps', 'editStepsVal'],
-    ['s3LoraScale', 's3LoraScaleVal'],
-    ['s3Steps', 's3StepsVal'],
     ['s4LoraScale', 's4LoraScaleVal'],
     ['s4LoraScale2', 's4LoraScale2Val'],
     ['s4Steps', 's4StepsVal'],
@@ -310,16 +313,16 @@ function initCollapsibles() {
 // FILE UPLOADS
 // ============================================================
 function initUploads() {
+  setupUploadZone('modelRefUpload', 'modelRefFileInput', 'modelRefPreview', (file) => {
+    state.modelRefImage = file;
+  });
+
   setupUploadZone('controlUpload', 'controlFileInput', 'controlPreview', (file) => {
     state.controlImage = file;
   });
 
   setupUploadZone('refUpload1', 'refFileInput1', 'refPreview1', (file) => {
     state.refImage1 = file;
-  });
-
-  setupUploadZone('s3Upload', 's3FileInput', 's3Preview', (file) => {
-    state.s3RefImage = file;
   });
 
   setupUploadZone('s4Upload', 's4FileInput', 's4Preview', (file) => {
@@ -364,37 +367,100 @@ function setupUploadZone(zoneId, inputId, previewId, onFile) {
 }
 
 // ============================================================
-// USE STAGE 1 RESULT
+// MODEL SHAPE (Stage 01)
 // ============================================================
-function initUseStage1Button() {
-  $('#btnUseStage1').addEventListener('click', async () => {
-    if (!state.workspace) return;
+function initModelButton() {
+  $('#btnModel').addEventListener('click', () => {
+    if (state.generating) return;
+    modelStage1();
+  });
+}
 
-    // Load stage 1 images
+async function modelStage1() {
+  if (!state.workspace) return;
+  if (!state.modelRefImage) {
+    alert('Please select a style reference image (Picture 2) first.');
+    return;
+  }
+
+  state.generating = true;
+  setGenerating(true);
+  updateProgress(0, 'Uploading…', '', '');
+
+  const formData = new FormData();
+  formData.append('workspace', state.workspace.name);
+  formData.append('prompt', $('#model-prompt').value);
+  formData.append('aspect_ratio', $('#model-aspect').value);
+  formData.append('sampler_name', $('#model-sampler').value);
+  formData.append('schedule_name', $('#model-schedule').value);
+  formData.append('num_inference_steps', $('#modelSteps').value);
+  formData.append('lora_scale', $('#modelLoraScale').value);
+  formData.append('lora_path', $('#model-lora-path').value);
+  formData.append('ref_strength_2', $('#modelRefStrength').value);
+
+  const seed = $('#model-randomize').checked ? -1 : parseInt($('#model-seed').value);
+  formData.append('seed', String(seed));
+
+  formData.append('ref_image_2', state.modelRefImage);
+
+  try {
+    updateProgress(2, 'Sending to server…', '', '');
+
+    const resPromise = fetch('/api/model', { method: 'POST', body: formData });
+    const pollPromise = startProgressPolling();
+
+    const res = await resPromise;
+    stopProgressPolling();
+
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.detail || 'Model shape generation failed');
+    }
+
+    const data = await res.json();
+    updateProgress(100, 'Done!', '', '');
+
+    await loadStageGallery(1);
+    await loadHistory(1);
+
+    if (data.filename) {
+      selectGalleryImage(data.filename, 1);
+    }
+    if (data.seed) {
+      $('#model-seed').value = data.seed;
+    }
+  } catch (err) {
+    alert(`Error: ${err.message}`);
+  } finally {
+    state.generating = false;
+    setGenerating(false);
+  }
+}
+
+// ============================================================
+// USE STAGE 01 RESULT AS CONTROL (for Stage 02 GEN)
+// ============================================================
+function initUseStage1ForControl() {
+  $('#btnUseStage1ForControl').addEventListener('click', async () => {
+    if (!state.workspace) return;
     try {
       const res = await fetch(`/api/workspaces/${encodeURIComponent(state.workspace.name)}/stages/1/images`);
       const data = await res.json();
       const images = data.images || [];
-
       if (images.length === 0) {
-        alert('No Stage 01 images yet. Generate an image first.');
+        alert('No Stage 01 images yet. Generate a model shape first.');
         return;
       }
-
-      // Use the latest image
       const latest = images[images.length - 1];
       const imgUrl = `/api/workspaces/${encodeURIComponent(state.workspace.name)}/stages/1/images/${encodeURIComponent(latest)}`;
-
-      // Download the image and create a File object
       const imgRes = await fetch(imgUrl);
       const blob = await imgRes.blob();
       const file = new File([blob], latest, { type: blob.type });
-
-      state.refImage1 = file;
-      const preview = $('#refPreview1');
+      state.controlImage = file;
+      const preview = $('#controlPreview');
       preview.src = URL.createObjectURL(blob);
       preview.style.display = 'block';
-      $('#refUpload1').classList.add('has-image');
+      $('#controlUpload').classList.add('has-image');
     } catch (err) {
       alert(`Error loading stage 1 images: ${err.message}`);
     }
@@ -402,16 +468,16 @@ function initUseStage1Button() {
 }
 
 // ============================================================
-// GENERATE (Stage 01)
+// GENERATE (Stage 02)
 // ============================================================
 function initGenerateButton() {
   $('#btnGenerate').addEventListener('click', () => {
     if (state.generating) return;
-    generateStage1();
+    generateStage2();
   });
 }
 
-async function generateStage1() {
+async function generateStage2() {
   if (!state.workspace) return;
 
   state.generating = true;
@@ -439,13 +505,7 @@ async function generateStage1() {
   try {
     updateProgress(2, 'Sending to server…', '', '');
 
-    // Fire the API request (it will block until generation completes)
     const resPromise = fetch('/api/generate', { method: 'POST', body: formData });
-
-    // Poll for task_id from progress once server starts processing
-    // The API response will contain task_id, but we won't get it until it completes.
-    // Instead, we start polling the SSE endpoint once we get the response headers.
-    // However, since the `/api/generate` blocks, we'll start polling with a small delay.
     const pollPromise = startProgressPolling();
 
     const res = await resPromise;
@@ -459,12 +519,11 @@ async function generateStage1() {
     const data = await res.json();
     updateProgress(100, 'Done!', '', '');
 
-    // Reload gallery
-    await loadStageGallery(1);
-    await loadHistory(1);
+    await loadStageGallery(2);
+    await loadHistory(2);
 
     if (data.filename) {
-      selectGalleryImage(data.filename, 1);
+      selectGalleryImage(data.filename, 2);
     }
     if (data.seed) {
       $('#gen-seed').value = data.seed;
@@ -478,16 +537,43 @@ async function generateStage1() {
 }
 
 // ============================================================
-// EDIT (Stage 02)
+// EDIT (Stage 03)
 // ============================================================
 function initEditButton() {
   $('#btnEdit').addEventListener('click', () => {
     if (state.generating) return;
-    editStage2();
+    editStage3();
   });
 }
 
-async function editStage2() {
+function initUseStage2Button() {
+  $('#btnUseStage2').addEventListener('click', async () => {
+    if (!state.workspace) return;
+    try {
+      const res = await fetch(`/api/workspaces/${encodeURIComponent(state.workspace.name)}/stages/2/images`);
+      const data = await res.json();
+      const images = data.images || [];
+      if (images.length === 0) {
+        alert('No Stage 02 images yet. Generate an image first.');
+        return;
+      }
+      const latest = images[images.length - 1];
+      const imgUrl = `/api/workspaces/${encodeURIComponent(state.workspace.name)}/stages/2/images/${encodeURIComponent(latest)}`;
+      const imgRes = await fetch(imgUrl);
+      const blob = await imgRes.blob();
+      const file = new File([blob], latest, { type: blob.type });
+      state.refImage1 = file;
+      const preview = $('#refPreview1');
+      preview.src = URL.createObjectURL(blob);
+      preview.style.display = 'block';
+      $('#refUpload1').classList.add('has-image');
+    } catch (err) {
+      alert(`Error loading stage 2 images: ${err.message}`);
+    }
+  });
+}
+
+async function editStage3() {
   if (!state.workspace) return;
   if (!state.refImage1) {
     alert('Please select a reference image (Picture 1) first.');
@@ -530,103 +616,6 @@ async function editStage2() {
     const data = await res.json();
     updateProgress(100, 'Done!', '', '');
 
-    await loadStageGallery(2);
-    await loadHistory(2);
-
-    if (data.filename) {
-      selectGalleryImage(data.filename, 2);
-    }
-    if (data.seed) {
-      $('#edit-seed').value = data.seed;
-    }
-  } catch (err) {
-    alert(`Error: ${err.message}`);
-  } finally {
-    state.generating = false;
-    setGenerating(false);
-  }
-}
-
-// ============================================================
-// 3D PREP (Stage 03)
-// ============================================================
-function initPrep3dButton() {
-  $('#btnPrep3d').addEventListener('click', () => {
-    if (state.generating) return;
-    prepStage3();
-  });
-}
-
-function initUseStage2Button() {
-  $('#btnUseStage2').addEventListener('click', async () => {
-    if (!state.workspace) return;
-    try {
-      const res = await fetch(`/api/workspaces/${encodeURIComponent(state.workspace.name)}/stages/2/images`);
-      const data = await res.json();
-      const images = data.images || [];
-      if (images.length === 0) {
-        alert('No Stage 02 images yet. Edit an image first.');
-        return;
-      }
-      const latest = images[images.length - 1];
-      const imgUrl = `/api/workspaces/${encodeURIComponent(state.workspace.name)}/stages/2/images/${encodeURIComponent(latest)}`;
-      const imgRes = await fetch(imgUrl);
-      const blob = await imgRes.blob();
-      const file = new File([blob], latest, { type: blob.type });
-      state.s3RefImage = file;
-      const preview = $('#s3Preview');
-      preview.src = URL.createObjectURL(blob);
-      preview.style.display = 'block';
-      $('#s3Upload').classList.add('has-image');
-    } catch (err) {
-      alert(`Error loading stage 2 images: ${err.message}`);
-    }
-  });
-}
-
-async function prepStage3() {
-  if (!state.workspace) return;
-  if (!state.s3RefImage) {
-    alert('Please select a reference image first.');
-    return;
-  }
-
-  state.generating = true;
-  setGenerating(true);
-  updateProgress(0, 'Uploading…', '', '');
-
-  const formData = new FormData();
-  formData.append('workspace', state.workspace.name);
-  formData.append('prompt', $('#s3-prompt').value);
-  formData.append('aspect_ratio', $('#s3-aspect').value);
-  formData.append('sampler_name', $('#s3-sampler').value);
-  formData.append('schedule_name', $('#s3-schedule').value);
-  formData.append('num_inference_steps', $('#s3Steps').value);
-  formData.append('lora_scale', $('#s3LoraScale').value);
-  formData.append('lora_path', $('#s3-lora-path').value);
-
-  const seed = $('#s3-randomize').checked ? -1 : parseInt($('#s3-seed').value);
-  formData.append('seed', String(seed));
-
-  formData.append('ref_image_1', state.s3RefImage);
-
-  try {
-    updateProgress(2, 'Sending to server…', '', '');
-
-    const resPromise = fetch('/api/prep3d', { method: 'POST', body: formData });
-    const pollPromise = startProgressPolling();
-
-    const res = await resPromise;
-    stopProgressPolling();
-
-    if (!res.ok) {
-      const err = await res.json();
-      throw new Error(err.detail || '3D Prep failed');
-    }
-
-    const data = await res.json();
-    updateProgress(100, 'Done!', '', '');
-
     await loadStageGallery(3);
     await loadHistory(3);
 
@@ -634,7 +623,7 @@ async function prepStage3() {
       selectGalleryImage(data.filename, 3);
     }
     if (data.seed) {
-      $('#s3-seed').value = data.seed;
+      $('#edit-seed').value = data.seed;
     }
   } catch (err) {
     alert(`Error: ${err.message}`);
@@ -662,7 +651,7 @@ function initUseStage3Button() {
       const data = await res.json();
       const images = data.images || [];
       if (images.length === 0) {
-        alert('No Stage 03 images yet. Run 3D Prep first.');
+        alert('No Stage 03 images yet. Edit an image first.');
         return;
       }
       const latest = images[images.length - 1];
@@ -774,7 +763,7 @@ async function loadStageGallery(stage) {
       item.innerHTML = `
         <img src="${imgUrl}" alt="${filename}" loading="lazy" />
         <div class="item-actions">
-          ${stage === 1 ? `<button class="btn-use-result" data-filename="${filename}" data-target="2" title="Use in Stage 02">→ 02</button>` : ''}
+          ${stage === 1 ? `<button class="btn-use-result" data-filename="${filename}" data-target="2" title="Use as Control in Stage 02">→ 02</button>` : ''}
           ${stage === 2 ? `<button class="btn-use-result" data-filename="${filename}" data-target="3" title="Use in Stage 03">→ 03</button>` : ''}
           ${stage === 3 ? `<button class="btn-use-result" data-filename="${filename}" data-target="4" title="Use in Stage 04">→ 04</button>` : ''}
         </div>
@@ -797,17 +786,17 @@ async function loadStageGallery(stage) {
           const file = new File([blob], filename, { type: blob.type });
 
           if (targetStage === 2) {
+            state.controlImage = file;
+            const preview = $('#controlPreview');
+            preview.src = URL.createObjectURL(blob);
+            preview.style.display = 'block';
+            $('#controlUpload').classList.add('has-image');
+          } else if (targetStage === 3) {
             state.refImage1 = file;
             const preview = $('#refPreview1');
             preview.src = URL.createObjectURL(blob);
             preview.style.display = 'block';
             $('#refUpload1').classList.add('has-image');
-          } else if (targetStage === 3) {
-            state.s3RefImage = file;
-            const preview = $('#s3Preview');
-            preview.src = URL.createObjectURL(blob);
-            preview.style.display = 'block';
-            $('#s3Upload').classList.add('has-image');
           } else if (targetStage === 4) {
             state.s4RefImage = file;
             const preview = $('#s4Preview');
@@ -851,7 +840,7 @@ function setGenerating(isGenerating) {
   const overlay = $('#progressOverlay');
   overlay.style.display = isGenerating ? 'flex' : 'none';
 
-  const btns = ['#btnGenerate', '#btnEdit', '#btnPrep3d', '#btnDelight'];
+  const btns = ['#btnModel', '#btnGenerate', '#btnEdit', '#btnDelight'];
   btns.forEach((sel) => {
     const btn = $(sel);
     if (btn) {

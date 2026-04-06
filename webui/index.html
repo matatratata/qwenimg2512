@@ -53,17 +53,17 @@
       <div class="stage-layout" id="stageLayout">
         <!-- Stage Sidebar -->
         <nav class="sidebar" id="stageSidebar">
-          <button class="stage-tab active" data-stage="1" title="Generate building image">
+          <button class="stage-tab active" data-stage="1" title="3D model shape from style reference">
             <span class="stage-num">01</span>
+            <span>MODEL</span>
+          </button>
+          <button class="stage-tab" data-stage="2" title="Generate building image">
+            <span class="stage-num">02</span>
             <span>GEN</span>
           </button>
-          <button class="stage-tab" data-stage="2" title="Edit: move to white bg">
-            <span class="stage-num">02</span>
-            <span>EDIT</span>
-          </button>
-          <button class="stage-tab" data-stage="3" title="3D object prep">
+          <button class="stage-tab" data-stage="3" title="Edit: move to white bg">
             <span class="stage-num">03</span>
-            <span>3D</span>
+            <span>EDIT</span>
           </button>
           <button class="stage-tab" data-stage="4" title="De-light object">
             <span class="stage-num">04</span>
@@ -77,10 +77,143 @@
 
         <!-- Left Panel -->
         <aside class="panel panel-left">
-          <!-- ===== Stage 01: Generate ===== -->
+          <!-- ===== Stage 01: 3D Model Shape ===== -->
           <div class="stage-content active" data-stage="1">
             <div class="panel-scroll">
-              <h3 class="panel-title">Stage 01 — Generate</h3>
+              <h3 class="panel-title">Stage 01 — 3D Model Shape</h3>
+
+              <div class="form-group">
+                <label for="model-prompt">Prompt</label>
+                <textarea class="input-field" id="model-prompt"
+                  rows="4">Create 3D model image of  modern  neo-tokyo  urban  building  in Picture 1 that is loosely inspired by modern neo-tokyo building from  Picture 2.  White background</textarea>
+              </div>
+
+              <!-- Picture 1: White BG (auto-generated) -->
+              <div class="form-group">
+                <label>Target Background (Picture 1)</label>
+                <div class="white-bg-preview" id="modelWhiteBgPreview">
+                  <div class="white-bg-box"></div>
+                  <span class="white-bg-label">White — auto-generated to match aspect ratio</span>
+                </div>
+              </div>
+
+              <!-- Picture 2: Style reference -->
+              <div class="form-group">
+                <label>Style Reference (Picture 2)</label>
+                <div class="upload-zone upload-zone-sm" id="modelRefUpload" style="margin-bottom:8px">
+                  <input type="file" id="modelRefFileInput" accept="image/*" hidden />
+                  <div class="upload-placeholder">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"
+                      opacity="0.4">
+                      <rect x="3" y="3" width="18" height="18" rx="2" />
+                      <circle cx="8.5" cy="8.5" r="1.5" />
+                      <polyline points="21 15 16 10 5 21" />
+                    </svg>
+                    <p>Drop style reference or <span class="accent-link">browse</span></p>
+                  </div>
+                  <img id="modelRefPreview" class="upload-preview" alt="Style Reference" />
+                </div>
+                
+                <div id="modelReferenceList" style="display:none; gap:8px; overflow-x:auto; padding-bottom:4px; margin-top:8px">
+                  <!-- Thumbnails populated by JS -->
+                </div>
+              </div>
+
+              <div class="form-group">
+                <label>Ref Strength (Picture 2) <span class="slider-val" id="modelRefStrengthVal">0.16</span></label>
+                <div class="slider-row">
+                  <input type="range" id="modelRefStrength" min="0" max="1" step="0.01" value="0.16" />
+                </div>
+              </div>
+
+              <div class="form-group">
+                <label>LoRA Path</label>
+                <input class="input-field" type="text" id="model-lora-path" value=""
+                  placeholder="Path to Lightning LoRA .safetensors" />
+              </div>
+
+              <div class="form-group">
+                <label>LoRA Scale <span class="slider-val" id="modelLoraScaleVal">0.60</span></label>
+                <div class="slider-row">
+                  <input type="range" id="modelLoraScale" min="0" max="1" step="0.05" value="0.60" />
+                </div>
+              </div>
+
+              <div class="form-group">
+                <label>Steps <span class="slider-val" id="modelStepsVal">16</span></label>
+                <div class="slider-row">
+                  <input type="range" id="modelSteps" min="4" max="100" step="1" value="16" />
+                </div>
+              </div>
+
+              <div class="form-group">
+                <label for="model-aspect">Aspect Ratio</label>
+                <select class="input-field" id="model-aspect">
+                  <option value="9:16 Half (480x832)" selected>9:16 Half (480×832)</option>
+                  <option value="16:9 Half (832x480)">16:9 Half (832×480)</option>
+                  <option value="1:1 Half (640x640)">1:1 Half (640×640)</option>
+                  <option value="9:16 (960x1664)">9:16 (960×1664)</option>
+                  <option value="16:9 (1664x960)">16:9 (1664×960)</option>
+                  <option value="1:1 (1344x1344)">1:1 (1344×1344)</option>
+                </select>
+              </div>
+
+              <div class="form-group">
+                <label for="model-sampler">Sampler</label>
+                <select class="input-field" id="model-sampler">
+                  <option value="res_2s" selected>Res 2S</option>
+                  <option value="euler">Euler</option>
+                  <option value="euler_a">Euler Ancestral</option>
+                  <option value="dpmpp_2m">DPM++ 2M</option>
+                </select>
+              </div>
+
+              <div class="form-group">
+                <label for="model-schedule">Schedule</label>
+                <select class="input-field" id="model-schedule">
+                  <option value="beta57" selected>Beta57</option>
+                  <option value="default">Default</option>
+                </select>
+              </div>
+
+              <div class="form-group">
+                <label>Seed</label>
+                <div class="seed-row">
+                  <input type="number" class="input-field" id="model-seed" value="-1" min="-1" max="4294967295" />
+                  <label class="checkbox-label">
+                    <input type="checkbox" id="model-randomize" checked />
+                    Random
+                  </label>
+                </div>
+              </div>
+
+              <button class="btn-primary" id="btnModel">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path
+                    d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z" />
+                  <polyline points="3.27 6.96 12 12.01 20.73 6.96" />
+                  <line x1="12" y1="22.08" x2="12" y2="12" />
+                </svg>
+                Generate Model Shape
+              </button>
+            </div>
+
+            <!-- History -->
+            <div class="history-panel" id="historyPanel1">
+              <button class="history-toggle" id="historyToggle1">
+                <span>History</span>
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <polyline points="6 9 12 15 18 9" />
+                </svg>
+              </button>
+              <div class="history-list" id="historyList1"></div>
+            </div>
+          </div>
+
+          <!-- ===== Stage 02: Generate ===== -->
+          <div class="stage-content" data-stage="2">
+            <div class="panel-scroll">
+              <h3 class="panel-title">Stage 02 — Generate</h3>
 
               <div class="form-group">
                 <label for="gen-prompt">Prompt</label>
@@ -117,6 +250,13 @@
                   </div>
                   <img id="controlPreview" class="upload-preview" alt="Control" />
                 </div>
+                <button class="btn-use-result" id="btnUseStage1ForControl" style="margin-top:8px">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M5 12h14" />
+                    <path d="M12 5l7 7-7 7" />
+                  </svg>
+                  Use Stage 01 Result as Control
+                </button>
               </div>
 
               <div class="form-group">
@@ -199,21 +339,21 @@
             </div>
 
             <!-- History -->
-            <div class="history-panel" id="historyPanel1">
-              <button class="history-toggle" id="historyToggle1">
+            <div class="history-panel" id="historyPanel2">
+              <button class="history-toggle" id="historyToggle2">
                 <span>History</span>
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                   <polyline points="6 9 12 15 18 9" />
                 </svg>
               </button>
-              <div class="history-list" id="historyList1"></div>
+              <div class="history-list" id="historyList2"></div>
             </div>
           </div>
 
-          <!-- ===== Stage 02: Edit ===== -->
-          <div class="stage-content" data-stage="2">
+          <!-- ===== Stage 03: Edit ===== -->
+          <div class="stage-content" data-stage="3">
             <div class="panel-scroll">
-              <h3 class="panel-title">Stage 02 — Edit to White BG</h3>
+              <h3 class="panel-title">Stage 03 — Edit to White BG</h3>
 
               <div class="form-group">
                 <label for="edit-prompt">Prompt</label>
@@ -237,12 +377,12 @@
                   </div>
                   <img id="refPreview1" class="upload-preview" alt="Reference" />
                 </div>
-                <button class="btn-use-result" id="btnUseStage1" style="margin-top:8px">
+                <button class="btn-use-result" id="btnUseStage2" style="margin-top:8px">
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <path d="M5 12h14" />
                     <path d="M12 5l7 7-7 7" />
                   </svg>
-                  Use Stage 01 Result
+                  Use Stage 02 Result
                 </button>
               </div>
 
@@ -280,6 +420,7 @@
                 <select class="input-field" id="edit-aspect">
                   <option value="9:16 (960x1664)" selected>9:16 (960×1664)</option>
                   <option value="16:9 (1664x960)">16:9 (1664×960)</option>
+                  <option value="1:1 Square (1024x1024)">1:1 (1024×1024)</option>
                   <option value="1:1 (1344x1344)">1:1 (1344×1344)</option>
                   <option value="4:3 (1472x1088)">4:3 (1472×1088)</option>
                   <option value="3:4 (1088x1472)">3:4 (1088×1472)</option>
@@ -323,127 +464,6 @@
                   <path d="M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z" />
                 </svg>
                 Edit Image
-              </button>
-            </div>
-
-            <!-- History -->
-            <div class="history-panel" id="historyPanel2">
-              <button class="history-toggle" id="historyToggle2">
-                <span>History</span>
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <polyline points="6 9 12 15 18 9" />
-                </svg>
-              </button>
-              <div class="history-list" id="historyList2"></div>
-            </div>
-          </div>
-
-          <!-- ===== Stage 03: 3D Prep ===== -->
-          <div class="stage-content" data-stage="3">
-            <div class="panel-scroll">
-              <h3 class="panel-title">Stage 03 — 3D Object Prep</h3>
-
-              <div class="form-group">
-                <label for="s3-prompt">Prompt</label>
-                <textarea class="input-field" id="s3-prompt"
-                  rows="4">Prepare detailed damaged building for 3D mesh. grey material. Remove loose clutter.</textarea>
-              </div>
-
-              <!-- Ref Image -->
-              <div class="form-group">
-                <label>Reference Image (from Stage 02)</label>
-                <div class="upload-zone upload-zone-sm" id="s3Upload">
-                  <input type="file" id="s3FileInput" accept="image/*" hidden />
-                  <div class="upload-placeholder">
-                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"
-                      opacity="0.4">
-                      <rect x="3" y="3" width="18" height="18" rx="2" />
-                      <circle cx="8.5" cy="8.5" r="1.5" />
-                      <polyline points="21 15 16 10 5 21" />
-                    </svg>
-                    <p>Drop image or <span class="accent-link">browse</span></p>
-                  </div>
-                  <img id="s3Preview" class="upload-preview" alt="Reference" />
-                </div>
-                <button class="btn-use-result" id="btnUseStage2" style="margin-top:8px">
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="M5 12h14" />
-                    <path d="M12 5l7 7-7 7" />
-                  </svg>
-                  Use Stage 02 Result
-                </button>
-              </div>
-
-              <div class="form-group">
-                <label>LoRA Path</label>
-                <input class="input-field" type="text" id="s3-lora-path" value=""
-                  placeholder="Path to Lightning LoRA .safetensors" />
-              </div>
-
-              <div class="form-group">
-                <label>LoRA Scale <span class="slider-val" id="s3LoraScaleVal">0.60</span></label>
-                <div class="slider-row">
-                  <input type="range" id="s3LoraScale" min="0" max="1" step="0.05" value="0.60" />
-                </div>
-              </div>
-
-              <div class="form-group">
-                <label>Steps <span class="slider-val" id="s3StepsVal">21</span></label>
-                <div class="slider-row">
-                  <input type="range" id="s3Steps" min="4" max="100" step="1" value="21" />
-                </div>
-              </div>
-
-              <div class="form-group">
-                <label for="s3-aspect">Aspect Ratio</label>
-                <select class="input-field" id="s3-aspect">
-                  <option value="9:16 (960x1664)" selected>9:16 (960×1664)</option>
-                  <option value="16:9 (1664x960)">16:9 (1664×960)</option>
-                  <option value="1:1 (1344x1344)">1:1 (1344×1344)</option>
-                  <option value="4:3 (1472x1088)">4:3 (1472×1088)</option>
-                  <option value="3:4 (1088x1472)">3:4 (1088×1472)</option>
-                  <option value="9:16 Half (480x832)">9:16 Half (480×832)</option>
-                  <option value="1:1 Half (640x640)">1:1 Half (640×640)</option>
-                </select>
-              </div>
-
-              <div class="form-group">
-                <label for="s3-sampler">Sampler</label>
-                <select class="input-field" id="s3-sampler">
-                  <option value="res_2s" selected>Res 2S</option>
-                  <option value="euler">Euler</option>
-                  <option value="euler_a">Euler Ancestral</option>
-                  <option value="dpmpp_2m">DPM++ 2M</option>
-                </select>
-              </div>
-
-              <div class="form-group">
-                <label for="s3-schedule">Schedule</label>
-                <select class="input-field" id="s3-schedule">
-                  <option value="beta57" selected>Beta57</option>
-                  <option value="default">Default</option>
-                </select>
-              </div>
-
-              <div class="form-group">
-                <label>Seed</label>
-                <div class="seed-row">
-                  <input type="number" class="input-field" id="s3-seed" value="11456" min="-1" max="4294967295" />
-                  <label class="checkbox-label">
-                    <input type="checkbox" id="s3-randomize" />
-                    Random
-                  </label>
-                </div>
-              </div>
-
-              <button class="btn-primary" id="btnPrep3d">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <path
-                    d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z" />
-                  <polyline points="3.27 6.96 12 12.01 20.73 6.96" />
-                  <line x1="12" y1="22.08" x2="12" y2="12" />
-                </svg>
-                3D Prep
               </button>
             </div>
 
@@ -532,6 +552,7 @@
                 <select class="input-field" id="s4-aspect">
                   <option value="9:16 (960x1664)" selected>9:16 (960×1664)</option>
                   <option value="16:9 (1664x960)">16:9 (1664×960)</option>
+                  <option value="1:1 Square (1024x1024)">1:1 (1024×1024)</option>
                   <option value="1:1 (1344x1344)">1:1 (1344×1344)</option>
                   <option value="4:3 (1472x1088)">4:3 (1472×1088)</option>
                   <option value="3:4 (1088x1472)">3:4 (1088×1472)</option>
