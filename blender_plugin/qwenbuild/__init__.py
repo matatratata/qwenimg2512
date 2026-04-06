@@ -490,10 +490,26 @@ class QWENBUILD_OT_render_passes(bpy.types.Operator):
         )
 
         all_paths = []
+        export_data = {
+            "source": "qwenbuild_blender",
+            "cameras": []
+        }
+
         for i, cam in enumerate(cameras):
             print(f"[QwenBuild] Camera {i+1}/{len(cameras)}: {cam.name}")
             paths = render_viewport_passes(context, cam, output_dir)
             all_paths.extend(paths)
+            if len(paths) >= 2:
+                export_data["cameras"].append({
+                    "name": cam.name,
+                    "combined": paths[0],
+                    "ao": paths[1]
+                })
+
+        import json
+        export_file = os.path.join(output_dir, "qwen_export.json")
+        with open(export_file, "w", encoding="utf-8") as f:
+            json.dump(export_data, f, indent=2)
 
         self.report({'INFO'}, f"Rendered {len(all_paths)} passes to {output_dir}")
         return {'FINISHED'}
@@ -554,60 +570,70 @@ class QWENBUILD_OT_create_material(bpy.types.Operator):
             self.report({'ERROR'}, "No AO images found in output directory")
             return {'CANCELLED'}
 
-        # ── Build material ──
-        mat_name = "QwenBuild_AO"
-        mat = bpy.data.materials.get(mat_name)
-        if mat:
-            bpy.data.materials.remove(mat)
-        mat = bpy.data.materials.new(name=mat_name)
-        mat.use_nodes = True
-        nodes = mat.node_tree.nodes
-        links = mat.node_tree.links
-        nodes.clear()
+        # Delete old materials to prevent buildup
+        for m in list(bpy.data.materials):
+            if m.name.startswith("QwenBuild_AO"):
+                bpy.data.materials.remove(m)
 
-        output_node = nodes.new("ShaderNodeOutputMaterial")
-        output_node.location = (800, 0)
+        from .sg_core import project as sg_project
+        from .sg_core import utils as sg_utils
 
-        principled = nodes.new("ShaderNodeBsdfPrincipled")
-        principled.location = (500, 0)
-        links.new(principled.outputs["BSDF"], output_node.inputs["Surface"])
+        orig_get_file_path = sg_project.get_file_path
+        orig_get_dir_path = sg_project.get_dir_path
 
-        if len(ao_images) == 1:
-            _, cam, img = ao_images[0]
-            tex_node = nodes.new("ShaderNodeTexImage")
-            tex_node.image = img
-            tex_node.location = (0, 0)
-            tex_node.label = cam.name
-            links.new(tex_node.outputs["Color"], principled.inputs["Base Color"])
-        else:
-            tex_nodes = []
-            for idx, (i, cam, img) in enumerate(ao_images):
-                tex = nodes.new("ShaderNodeTexImage")
-                tex.image = img
-                tex.location = (-400, -300 * idx)
-                tex.label = cam.name
-                tex_nodes.append(tex)
+        def mock_get_file_path(ctx, category, *args, **kwargs):
+            if category == "generated":
+                return ""  # Return empty path → placeholder fallback
+            try:
+                return orig_get_file_path(ctx, category, *args, **kwargs)
+            except Exception:
+                return ""
 
-            current = tex_nodes[0]
-            for idx in range(1, len(tex_nodes)):
-                mix = nodes.new("ShaderNodeMixRGB")
-                mix.blend_type = 'MIX'
-                mix.location = (200 * idx - 200, -150 * idx)
-                mix.inputs["Fac"].default_value = 1.0 / (idx + 1)
-                links.new(current.outputs["Color"], mix.inputs["Color1"])
-                links.new(tex_nodes[idx].outputs["Color"], mix.inputs["Color2"])
-                current = mix
+        def mock_get_dir_path(ctx, category, *args, **kwargs):
+            if category == "inpaint":
+                return ""  # disable edge feather loading
+            try:
+                return orig_get_dir_path(ctx, category, *args, **kwargs)
+            except Exception:
+                return ""
 
-            links.new(current.outputs["Color"], principled.inputs["Base Color"])
+        sg_project.get_file_path = mock_get_file_path
+        sg_utils.get_file_path = mock_get_file_path
+        sg_project.get_dir_path = mock_get_dir_path
+        sg_utils.get_dir_path = mock_get_dir_path
 
+        mat_id = "QB_AO"
+        try:
+            sg_project.project_image(context, mesh_objs, mat_id=mat_id, stop_index=len(cameras)-1)
+        except Exception as e:
+            self.report({'ERROR'}, f"Failed to run projection: {e}")
+            import traceback
+            traceback.print_exc()
+            return {'CANCELLED'}
+        finally:
+            sg_project.get_file_path = orig_get_file_path
+            sg_utils.get_file_path = orig_get_file_path
+            sg_project.get_dir_path = orig_get_dir_path
+            sg_utils.get_dir_path = orig_get_dir_path
+
+        # Now link images into the generated tree
         for obj in mesh_objs:
-            if obj.data.materials:
-                obj.data.materials[0] = mat
-            else:
-                obj.data.materials.append(mat)
+            mat = obj.active_material
+            if not mat or not mat.use_nodes: continue
 
-        self.report({'INFO'},
-                    f"Created material '{mat_name}' with {len(ao_images)} AO textures")
+            mat.name = "QwenBuild_AO"
+
+            for node in mat.node_tree.nodes:
+                if node.type == 'TEX_IMAGE' and node.label and node.label.endswith(f"-{mat_id}"):
+                    try:
+                        cam_idx = int(node.label.split('-')[0])
+                        matching_ao = next((img for idx, c, img in ao_images if cameras.index(c) == cam_idx), None)
+                        if matching_ao:
+                            node.image = matching_ao
+                    except ValueError:
+                        pass
+
+        self.report({'INFO'}, f"Created projection material from AO passes")
         return {'FINISHED'}
 
 

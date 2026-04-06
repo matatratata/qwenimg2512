@@ -23,7 +23,13 @@
       <div class="header-workspace" id="headerWorkspace" style="display:none">
         <span>Workspace:</span>
         <span class="workspace-name" id="headerWorkspaceName"></span>
-        <button class="btn-header" id="btnChangeWorkspace">Change</button>
+        <button class="btn-header" id="btnChangeWorkspace" style="margin-right:8px">Change</button>
+        <button class="btn-header" id="btnSettings" title="Settings" style="display:inline-flex; align-items:center; justify-content:center;">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="3"></circle>
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+          </svg>
+        </button>
       </div>
     </header>
 
@@ -41,7 +47,7 @@
             <path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z" />
           </svg>
           <span class="root-path" id="rootPathDisplay">~/Pictures/qwen-buildings</span>
-          <button class="btn-header" id="btnChangeRoot">Change</button>
+          <button class="btn-header" id="btnSettingsWelcome" style="margin-left:auto">Settings</button>
         </div>
 
         <div class="workspace-grid" id="workspaceGrid">
@@ -85,7 +91,7 @@
               <div class="form-group">
                 <label for="model-prompt">Prompt</label>
                 <textarea class="input-field" id="model-prompt"
-                  rows="4">Create 3D model image of  modern  neo-tokyo  urban  building  in Picture 1 that is loosely inspired by modern neo-tokyo building from  Picture 2.  White background</textarea>
+                  rows="4">Create 3D model image of modern neo-tokyo urban building in Picture 1 that is loosely inspired by modern neo-tokyo building from Picture 2. White background</textarea>
               </div>
 
               <!-- Picture 1: White BG (auto-generated) -->
@@ -465,6 +471,21 @@
                 </svg>
                 Edit Image
               </button>
+
+              <div style="margin-top:12px; padding-top:12px; border-top:1px solid var(--border);">
+                <input type="file" id="batchBlenderInput" accept=".json" hidden />
+                <button class="btn-secondary" id="btnBatchBlender" style="width:100%; display:flex; justify-content:center; gap:8px;">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <line x1="8" y1="6" x2="21" y2="6" />
+                    <line x1="8" y1="12" x2="21" y2="12" />
+                    <line x1="8" y1="18" x2="21" y2="18" />
+                    <line x1="3" y1="6" x2="3.01" y2="6" />
+                    <line x1="3" y1="12" x2="3.01" y2="12" />
+                    <line x1="3" y1="18" x2="3.01" y2="18" />
+                  </svg>
+                  Batch Render from Blender
+                </button>
+              </div>
             </div>
 
             <!-- History -->
@@ -716,6 +737,7 @@
             </div>
             <p class="progress-text" id="progressText">Initializing…</p>
             <p class="progress-step" id="progressStep"></p>
+            <button id="btnCancel" class="btn-secondary" style="margin-top: 16px;">Cancel</button>
           </div>
 
           <!-- Gallery + Viewer split -->
@@ -819,6 +841,57 @@
           <span class="compare-label-left">Reference</span>
           <span class="compare-label-right">Result</span>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ====== Settings Modal ====== -->
+  <dialog id="settingsModal" style="background:var(--bg-panel); border:1px solid var(--border); border-radius:var(--radius-lg); color:var(--cloud); padding:0; max-width:600px; width:90%;">
+    <div class="modal-content" style="padding:24px;">
+      <div class="modal-header">
+        <h3>Global Settings</h3>
+        <button class="btn-icon" id="btnCloseSettingsModal">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+        </button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label for="setting-workspace-root">Workspace Root Directory</label>
+          <input type="text" class="input-field" id="setting-workspace-root" />
+        </div>
+        
+        <hr class="divider"/>
+
+        <div class="form-group">
+          <label for="setting-qwen-2512">Qwen 2512 Model Path</label>
+          <input type="text" class="input-field" id="setting-qwen-2512" placeholder="Path to base model..." />
+        </div>
+
+        <div class="form-group">
+          <label for="setting-qwen-2511">Qwen Edit 2511 Model Path</label>
+          <input type="text" class="input-field" id="setting-qwen-2511" placeholder="Path to edit model..." />
+        </div>
+
+        <hr class="divider"/>
+
+        <div class="form-group">
+          <label for="setting-loras-dir">LoRAs Base Directory <span style="opacity:0.5; font-size:12px; font-weight:normal">(Auto-fills specific LoRA paths below if set)</span></label>
+          <input type="text" class="input-field" id="setting-loras-dir" placeholder="e.g. ~/AI/Models/LoRAs" />
+        </div>
+
+        <div class="form-group" style="padding-left:16px; border-left: 2px solid var(--border);">
+          <label for="setting-lighting-lora">Lightning LoRA Path <span style="opacity:0.5; font-size:12px; font-weight:normal">(telestyle_speedup)</span></label>
+          <input type="text" class="input-field" id="setting-lighting-lora" />
+        </div>
+        
+        <div class="form-group" style="padding-left:16px; border-left: 2px solid var(--border);">
+          <label for="setting-restoration-lora">Restoration LoRA Path <span style="opacity:0.5; font-size:12px; font-weight:normal">(telestyle_lora)</span></label>
+          <input type="text" class="input-field" id="setting-restoration-lora" />
+        </div>
+      </div>
+      <div class="modal-footer" style="display:flex; justify-content:flex-end; gap:8px">
+        <button class="btn-secondary" id="btnCancelSettingsModal">Cancel</button>
+        <button class="btn-primary" id="btnSaveSettingsModal" style="width:120px;">Save Settings</button>
       </div>
     </div>
   </div>

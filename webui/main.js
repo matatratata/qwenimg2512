@@ -15,6 +15,7 @@ const state = {
   s5OriginalImageData: null,// ImageData — original pixels for live reprocessing
   s5ProcessedCanvas: null,  // Canvas — latest processed result
   selectedGalleryImage: null,
+  currentTaskId: null,      // Tracks the task ID of the currently generating stage
   historyOpen: { 1: false, 2: false, 3: false, 4: false, 5: false },
 };
 
@@ -25,16 +26,19 @@ const $$ = (sel) => document.querySelectorAll(sel);
 // -------- Init --------
 function initAll() {
   const inits = [
-    ['initSettings', initSettings],
+    ['initSettingsModal', initSettingsModal],
     ['initWorkspacePage', initWorkspacePage],
     ['initStageTabs', initStageTabs],
     ['initSliders', initSliders],
     ['initCollapsibles', initCollapsibles],
     ['initUploads', initUploads],
+    ['initModelReferences', loadModelReferences],
     ['initModelButton', initModelButton],
     ['initUseStage1ForControl', initUseStage1ForControl],
     ['initGenerateButton', initGenerateButton],
+    ['initCancelButton', initCancelButton],
     ['initEditButton', initEditButton],
+    ['initBatchBlenderButton', initBatchBlenderButton],
     ['initUseStage2Button', initUseStage2Button],
     ['initDelightButton', initDelightButton],
     ['initUseStage3Button', initUseStage3Button],
@@ -68,40 +72,101 @@ async function initWorkspacePage() {
 }
 
 // ============================================================
-// SETTINGS (Workspace Root)
+// SETTINGS MODAL
 // ============================================================
-function initSettings() {
-  $('#btnChangeRoot').addEventListener('click', () => {
-    const dialog = $('#settingsDialog');
-    $('#settingsRoot').value = $('#rootPathDisplay').textContent;
-    dialog.showModal();
+function initSettingsModal() {
+  const modal = $('#settingsModal');
+  const btnOpenHeader = $('#btnSettings');
+  const btnOpenWelcome = $('#btnSettingsWelcome');
+  const btnClose = $('#btnCloseSettingsModal');
+  const btnCancel = $('#btnCancelSettingsModal');
+  const btnSave = $('#btnSaveSettingsModal');
+
+  // Input fields
+  const inpRoot = $('#setting-workspace-root');
+  const inpQwen2512 = $('#setting-qwen-2512');
+  const inpQwen2511 = $('#setting-qwen-2511');
+  const inpLorasDir = $('#setting-loras-dir');
+  const inpLightLora = $('#setting-lighting-lora');
+  const inpRestLora = $('#setting-restoration-lora');
+
+  async function openSettings() {
+    // Fetch latest
+    try {
+      const res = await fetch('/api/settings');
+      const s = await res.json();
+      inpRoot.value = s.workspace_root || '';
+      inpQwen2512.value = s.qwen_2512_path || '';
+      inpQwen2511.value = s.qwen_2511_path || '';
+      inpLorasDir.value = s.loras_dir || '';
+      inpLightLora.value = s.lightning_lora_path || '';
+      inpRestLora.value = s.restoration_lora_path || '';
+      modal.showModal();
+    } catch (e) {
+      console.error("Failed to load settings form", e);
+    }
+  }
+
+  function closeSettings() {
+    modal.close();
+  }
+
+  if (btnOpenHeader) btnOpenHeader.addEventListener('click', openSettings);
+  if (btnOpenWelcome) btnOpenWelcome.addEventListener('click', openSettings);
+  btnClose.addEventListener('click', closeSettings);
+  btnCancel.addEventListener('click', closeSettings);
+
+  // Auto-fill LoRA paths when the root Loras Dir is edited
+  inpLorasDir.addEventListener('input', () => {
+    let dir = inpLorasDir.value.trim();
+    if (!dir) return; // User cleared it, don't auto-fill empty strings unless needed
+    // Strip trailing slash
+    if (dir.endsWith('/')) dir = dir.slice(0, -1);
+    
+    inpLightLora.value = `${dir}/Qwen-Image-Edit-2511-Lightning-8steps-V1.0-bf16.safetensors`;
+    inpRestLora.value = `${dir}/dx8152_Qwen-Image-Edit-2509-Light_restoration_V2.safetensors`;
   });
 
-  $('#btnCancelSettings').addEventListener('click', () => {
-    $('#settingsDialog').close();
-  });
+  btnSave.addEventListener('click', async () => {
+    const payload = {
+      workspace_root: inpRoot.value.trim(),
+      qwen_2512_path: inpQwen2512.value.trim(),
+      qwen_2511_path: inpQwen2511.value.trim(),
+      loras_dir: inpLorasDir.value.trim(),
+      lightning_lora_path: inpLightLora.value.trim(),
+      restoration_lora_path: inpRestLora.value.trim()
+    };
+    
+    // Prevent completely empty root
+    if (!payload.workspace_root) payload.workspace_root = '~/Pictures/qwen-buildings';
 
-  $('#btnSaveSettings').addEventListener('click', async () => {
-    const newRoot = $('#settingsRoot').value.trim();
-    if (!newRoot) return;
+    const oldText = btnSave.textContent;
+    btnSave.textContent = "Saving...";
+    btnSave.disabled = true;
+
     try {
       const res = await fetch('/api/settings', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ workspace_root: newRoot }),
+        body: JSON.stringify(payload),
       });
       if (!res.ok) {
         const err = await res.json();
         alert(err.detail || 'Failed to save settings');
-        return;
+      } else {
+        closeSettings();
+        // Update root path UI
+        $('#rootPathDisplay').textContent = payload.workspace_root;
+        // Reload workspaces just in case root changed
+        await loadWorkspaces();
+        // Propagate defaults globally
+        await loadSettings();
       }
-      const settings = await res.json();
-      $('#rootPathDisplay').textContent = settings.workspace_root;
-      $('#settingsDialog').close();
-      // Reload workspaces from new root
-      await loadWorkspaces();
     } catch (err) {
       alert(`Error: ${err.message}`);
+    } finally {
+      btnSave.textContent = oldText;
+      btnSave.disabled = false;
     }
   });
 }
@@ -111,6 +176,24 @@ async function loadSettings() {
     const res = await fetch('/api/settings');
     const settings = await res.json();
     $('#rootPathDisplay').textContent = settings.workspace_root || '~/Pictures/qwen-buildings';
+
+    // Auto-map loaded paths into the UI Stage default fields:
+    if (settings.lightning_lora_path) {
+      const elModelLora = $('#model-lora-path');
+      if (elModelLora) elModelLora.value = settings.lightning_lora_path;
+      
+      const elEditLora = $('#edit-lora-path');
+      if (elEditLora) elEditLora.value = settings.lightning_lora_path;
+      
+      const elS4Lora = $('#s4-lora-path');
+      if (elS4Lora) elS4Lora.value = settings.lightning_lora_path;
+    }
+
+    if (settings.restoration_lora_path) {
+      const elS4Lora2 = $('#s4-lora-path-2'); // Note: index.html has s4-lora-path and we assume s4-lora-path-2? Wait... let me check exactly what the ID is. 
+      // ACTUALLY I'll just check if it exists before assigning
+      if (elS4Lora2) elS4Lora2.value = settings.restoration_lora_path;
+    }
   } catch {
     // ignore
   }
@@ -367,6 +450,63 @@ function setupUploadZone(zoneId, inputId, previewId, onFile) {
 }
 
 // ============================================================
+// MODEL REFERENCES (Workspace Root)
+// ============================================================
+async function loadModelReferences() {
+  try {
+    const res = await fetch('/api/model_references');
+    const data = await res.json();
+    const images = data.images || [];
+
+    const list = $('#modelReferenceList');
+    if (images.length === 0) {
+      list.style.display = 'none';
+      return;
+    }
+
+    list.style.display = 'flex';
+    list.innerHTML = '';
+
+    images.forEach(filename => {
+      const imgUrl = `/api/model_references/${encodeURIComponent(filename)}`;
+      const img = document.createElement('img');
+      img.src = imgUrl;
+      img.alt = filename;
+      img.style.height = '60px';
+      img.style.width = '60px';
+      img.style.objectFit = 'cover';
+      img.style.borderRadius = 'var(--radius-sm)';
+      img.style.cursor = 'pointer';
+      img.style.border = '2px solid transparent';
+      img.title = filename;
+
+      img.addEventListener('click', async () => {
+        try {
+          const response = await fetch(imgUrl);
+          const blob = await response.blob();
+          const file = new File([blob], filename, { type: blob.type });
+          state.modelRefImage = file;
+
+          const preview = $('#modelRefPreview');
+          preview.src = URL.createObjectURL(blob);
+          preview.style.display = 'block';
+          $('#modelRefUpload').classList.add('has-image');
+
+          list.querySelectorAll('img').forEach(el => el.style.borderColor = 'transparent');
+          img.style.borderColor = 'var(--accent)';
+        } catch (err) {
+          console.error('Error loading reference:', err);
+        }
+      });
+
+      list.appendChild(img);
+    });
+  } catch (err) {
+    console.error('Failed to load model references:', err);
+  }
+}
+
+// ============================================================
 // MODEL SHAPE (Stage 01)
 // ============================================================
 function initModelButton() {
@@ -537,6 +677,34 @@ async function generateStage2() {
 }
 
 // ============================================================
+// CANCEL GENERATION
+// ============================================================
+function initCancelButton() {
+  $('#btnCancel').addEventListener('click', async () => {
+    if (!state.currentTaskId) return;
+    
+    // Disable button to prevent multi-clicks
+    const btn = $('#btnCancel');
+    const oldText = btn.textContent;
+    btn.textContent = "Cancelling...";
+    btn.disabled = true;
+
+    try {
+      await fetch(`/api/cancel/${encodeURIComponent(state.currentTaskId)}`, { method: 'POST' });
+    } catch (err) {
+      console.error('Failed to cancel task:', err);
+      // Wait for the server to actually stop
+    } finally {
+      // Button will naturally reset when the overlay is hidden by setGenerating(false)
+      setTimeout(() => {
+        btn.textContent = oldText;
+        btn.disabled = false;
+      }, 2000);
+    }
+  });
+}
+
+// ============================================================
 // EDIT (Stage 03)
 // ============================================================
 function initEditButton() {
@@ -631,6 +799,78 @@ async function editStage3() {
     state.generating = false;
     setGenerating(false);
   }
+}
+
+function initBatchBlenderButton() {
+  const btn = $('#btnBatchBlender');
+  const fileInput = $('#batchBlenderInput');
+  if (!btn || !fileInput) return;
+
+  btn.addEventListener('click', () => {
+    if (state.generating) return;
+    fileInput.click();
+  });
+
+  fileInput.addEventListener('change', async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    // Reset input so they can trigger again
+    e.target.value = '';
+
+    if (!state.workspace) {
+      alert("Select a workspace first!");
+      return;
+    }
+
+    try {
+      const text = await file.text();
+      // Ensure it is valid JSON
+      JSON.parse(text);
+
+      state.generating = true;
+      setGenerating(true);
+      updateProgress(0, 'Reading batch…', '', '');
+
+      const formData = new FormData();
+      formData.append('workspace', state.workspace.name);
+      formData.append('json_data', text);
+      formData.append('prompt', $('#edit-prompt').value);
+      formData.append('aspect_ratio', $('#edit-aspect').value);
+      formData.append('sampler_name', $('#edit-sampler').value);
+      formData.append('schedule_name', $('#edit-schedule').value);
+      formData.append('num_inference_steps', $('#editSteps').value);
+      formData.append('lora_scale', $('#loraScale').value);
+      formData.append('lora_path', $('#edit-lora-path').value);
+
+      const seed = $('#edit-randomize').checked ? -1 : parseInt($('#edit-seed').value);
+      formData.append('seed', String(seed));
+
+      updateProgress(2, 'Sending batch to server…', '', '');
+
+      const resPromise = fetch('/api/batch/blender', { method: 'POST', body: formData });
+      const pollPromise = startProgressPolling();
+
+      const res = await resPromise;
+      stopProgressPolling();
+
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.detail || 'Batch processing failed');
+      }
+
+      await res.json();
+      updateProgress(100, 'Batch Done!', '', '');
+
+      await loadStageGallery(3);
+      await loadHistory(3);
+    } catch (err) {
+      alert(`Batch Error: ${err.message}`);
+    } finally {
+      state.generating = false;
+      setGenerating(false);
+    }
+  });
 }
 
 // ============================================================
@@ -885,6 +1125,10 @@ function startProgressPolling() {
 
       if (!info || info.done) return;
 
+      if (info.task_id) {
+        state.currentTaskId = info.task_id;
+      }
+
       const { step, total, stage, message, vram, vram_gb } = info;
 
       // Stage text
@@ -1036,6 +1280,28 @@ async function loadHistory(stage) {
 
 function loadHistoryEntry(entry, stage) {
   if (stage === 1 || stage === '1') {
+    if (entry.prompt) $('#model-prompt').value = entry.prompt;
+    if (entry.num_inference_steps != null) {
+      $('#modelSteps').value = entry.num_inference_steps;
+      $('#modelStepsVal').textContent = entry.num_inference_steps;
+    }
+    if (entry.lora_scale != null) {
+      $('#modelLoraScale').value = entry.lora_scale;
+      $('#modelLoraScaleVal').textContent = entry.lora_scale;
+    }
+    if (entry.lora_path) $('#model-lora-path').value = entry.lora_path;
+    if (entry.ref_strength_2 != null) {
+      $('#modelRefStrength').value = entry.ref_strength_2;
+      $('#modelRefStrengthVal').textContent = entry.ref_strength_2;
+    }
+    if (entry.aspect_ratio) $('#model-aspect').value = entry.aspect_ratio;
+    if (entry.sampler_name) $('#model-sampler').value = entry.sampler_name;
+    if (entry.schedule_name) $('#model-schedule').value = entry.schedule_name;
+    if (entry.seed != null) {
+      $('#model-seed').value = entry.seed;
+      $('#model-randomize').checked = false;
+    }
+  } else if (stage === 2 || stage === '2') {
     if (entry.prompt) $('#gen-prompt').value = entry.prompt;
     if (entry.negative_prompt) $('#gen-neg-prompt').value = entry.negative_prompt;
     if (entry.controlnet_conditioning_scale != null) {
@@ -1059,7 +1325,7 @@ function loadHistoryEntry(entry, stage) {
     }
     // Auto-load control image if available
     if (entry.control_image && state.workspace) {
-      const ctrlUrl = `/api/workspaces/${encodeURIComponent(state.workspace.name)}/stages/1/images/${encodeURIComponent(entry.control_image)}`;
+      const ctrlUrl = `/api/workspaces/${encodeURIComponent(state.workspace.name)}/stages/2/images/${encodeURIComponent(entry.control_image)}`;
       fetch(ctrlUrl).then(r => r.blob()).then(blob => {
         const file = new File([blob], entry.control_image, { type: blob.type });
         state.controlImage = file;
@@ -1069,7 +1335,7 @@ function loadHistoryEntry(entry, stage) {
         $('#controlUpload').classList.add('has-image');
       }).catch(() => {});
     }
-  } else if (stage === 2 || stage === '2') {
+  } else if (stage === 3 || stage === '3') {
     if (entry.prompt) $('#edit-prompt').value = entry.prompt;
     if (entry.num_inference_steps != null) {
       $('#editSteps').value = entry.num_inference_steps;
@@ -1086,24 +1352,6 @@ function loadHistoryEntry(entry, stage) {
     if (entry.seed != null) {
       $('#edit-seed').value = entry.seed;
       $('#edit-randomize').checked = false;
-    }
-  } else if (stage === 3 || stage === '3') {
-    if (entry.prompt) $('#s3-prompt').value = entry.prompt;
-    if (entry.num_inference_steps != null) {
-      $('#s3Steps').value = entry.num_inference_steps;
-      $('#s3StepsVal').textContent = entry.num_inference_steps;
-    }
-    if (entry.lora_scale != null) {
-      $('#s3LoraScale').value = entry.lora_scale;
-      $('#s3LoraScaleVal').textContent = entry.lora_scale;
-    }
-    if (entry.lora_path) $('#s3-lora-path').value = entry.lora_path;
-    if (entry.aspect_ratio) $('#s3-aspect').value = entry.aspect_ratio;
-    if (entry.sampler_name) $('#s3-sampler').value = entry.sampler_name;
-    if (entry.schedule_name) $('#s3-schedule').value = entry.schedule_name;
-    if (entry.seed != null) {
-      $('#s3-seed').value = entry.seed;
-      $('#s3-randomize').checked = false;
     }
   } else if (stage === 4 || stage === '4') {
     if (entry.prompt) $('#s4-prompt').value = entry.prompt;

@@ -1,3 +1,6 @@
 {
-  "workspace_root": "/home/matatrata/Pictures/qwen-buildings"
+  "workspace_root": "/home/matatrata/Pictures/qwen-buildings",
+  "loras_dir": "/home/matatrata/AI/Models/LORAS/qwenBuild",
+  "lightning_lora_path": "/home/matatrata/AI/Models/LORAS/qwenBuild/Qwen-Image-Edit-2511-Lightning-8steps-V1.0-bf16.safetensors",
+  "restoration_lora_path": "/home/matatrata/AI/Models/LORAS/qwenBuild/dx8152_Qwen-Image-Edit-2509-Light_restoration_V2.safetensors"
 }

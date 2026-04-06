@@ -45,6 +45,9 @@ DIST_DIR = WEBUI_DIR / "dist"
 def _load_settings() -> dict:
     defaults = {
         "workspace_root": str(Path.home() / "Pictures" / "qwen-buildings"),
+        "loras_dir": "",
+        "lightning_lora_path": "",
+        "restoration_lora_path": "",
     }
     if SETTINGS_FILE.exists():
         try:
@@ -68,6 +71,7 @@ gpu_lock = asyncio.Lock()
 
 # Progress tracking
 progress_store: dict = {}
+worker_store: dict = {}
 
 
 def _cleanup_worker(worker, label: str = "") -> None:
@@ -80,6 +84,11 @@ def _cleanup_worker(worker, label: str = "") -> None:
     import torch
 
     logger.info("[cleanup:%s] Releasing worker resources...", label)
+
+    # 0. Remove from worker_store
+    for tid, w in list(worker_store.items()):
+        if w is worker:
+            worker_store.pop(tid, None)
 
     # 1. Call the worker's own cleanup (deletes self._pipe, etc.)
     try:
@@ -276,6 +285,24 @@ def _connect_worker_progress(worker, task_id: str):
     worker.progress_updated.connect(on_progress)
     worker.stage_changed.connect(on_stage)
     worker.vram_updated.connect(on_vram)
+    
+    # Store reference so we can cancel it
+    worker_store[task_id] = worker
+
+
+# ---------------------------------------------------------------------------
+# API: Cancel Task
+# ---------------------------------------------------------------------------
+@app.post("/api/cancel/{task_id}")
+async def cancel_task(task_id: str):
+    """Mark a worker task as cancelled."""
+    worker = worker_store.get(task_id)
+    if worker is not None:
+        worker._is_cancelled = True
+        if task_id in progress_store:
+            progress_store[task_id]["message"] = "Cancelling..."
+        return {"status": "cancelled"}
+    raise HTTPException(404, "Task or worker not found")
 
 
 # ---------------------------------------------------------------------------
@@ -294,19 +321,46 @@ async def startup():
 # ---------------------------------------------------------------------------
 @app.get("/api/settings")
 async def get_settings():
-    return _load_settings()
+    from qwenimg2512.config import Config
+    cfg = Config.load()
+    web = _load_settings()
+    web["qwen_2512_path"] = cfg.model_paths.base_model_dir
+    web["qwen_2511_path"] = cfg.model_paths.edit_base_model_dir
+    return web
 
 
 @app.put("/api/settings")
 async def update_settings(body: dict):
+    from qwenimg2512.config import Config
+    cfg = Config.load()
     settings = _load_settings()
+    
     if "workspace_root" in body:
         new_root = body["workspace_root"].strip()
         if new_root:
             Path(new_root).mkdir(parents=True, exist_ok=True)
             settings["workspace_root"] = new_root
+            
+    if "loras_dir" in body:
+        settings["loras_dir"] = body["loras_dir"].strip()
+
+    if "lightning_lora_path" in body:
+        settings["lightning_lora_path"] = body["lightning_lora_path"].strip()
+        cfg.model_paths.telestyle_speedup = settings["lightning_lora_path"]
+
+    if "restoration_lora_path" in body:
+        settings["restoration_lora_path"] = body["restoration_lora_path"].strip()
+        cfg.model_paths.telestyle_lora = settings["restoration_lora_path"]
+
     _save_settings(settings)
-    return settings
+
+    if "qwen_2512_path" in body:
+        cfg.model_paths.base_model_dir = body["qwen_2512_path"].strip()
+    if "qwen_2511_path" in body:
+        cfg.model_paths.edit_base_model_dir = body["qwen_2511_path"].strip()
+
+    cfg.save()
+    return await get_settings()
 
 
 # ---------------------------------------------------------------------------
@@ -318,7 +372,10 @@ async def progress_latest():
     for task_id in reversed(list(progress_store.keys())):
         info = progress_store[task_id]
         if not info.get("done"):
-            return JSONResponse(info)
+            # Inject task_id so frontend can identify it
+            info_copy = dict(info)
+            info_copy["task_id"] = task_id
+            return JSONResponse(info_copy)
     return JSONResponse({"done": True, "step": 0, "total": 0, "stage": "Idle"})
 
 
@@ -345,7 +402,7 @@ async def list_workspaces():
     workspaces = []
     if _get_workspace_root().exists():
         for d in sorted(_get_workspace_root().iterdir()):
-            if d.is_dir() and not d.name.startswith("."):
+            if d.is_dir() and not d.name.startswith(".") and d.name != "model_reference":
                 # Count images
                 image_count = 0
                 thumbnail = None
@@ -492,7 +549,7 @@ async def get_history(name: str, stage: Optional[int] = None):
 @app.post("/api/model")
 async def model_shape(
     workspace: str = Form(...),
-    prompt: str = Form("Create 3D model image of  modern  neo-tokyo  urban  building  in Picture 1 that is loosely inspired by modern neo-tokyo building from  Picture 2.  White background"),
+    prompt: str = Form("Create 3D model image of modern neo-tokyo urban building in Picture 1 that is loosely inspired by modern neo-tokyo building from Picture 2. White background"),
     aspect_ratio: str = Form("9:16 Half (480x832)"),
     sampler_name: str = Form("res_2s"),
     schedule_name: str = Form("beta57"),
@@ -775,6 +832,147 @@ def _run_generate(
         raise RuntimeError("No output image produced")
 
     return str(images[0])
+
+
+# ---------------------------------------------------------------------------
+# API: Batch Blender (Stage 03)
+# ---------------------------------------------------------------------------
+@app.post("/api/batch/blender")
+async def batch_blender(
+    workspace: str = Form(...),
+    json_data: str = Form(...),
+    prompt: str = Form(""),
+    aspect_ratio: str = Form("9:16 (960x1664)"),
+    sampler_name: str = Form("res_2s"),
+    schedule_name: str = Form("beta57"),
+    num_inference_steps: int = Form(16),
+    seed: int = Form(-1),
+    lora_path: str = Form(""),
+    lora_scale: float = Form(0.6),
+):
+    import json
+    try:
+        payload = json.loads(json_data)
+        cameras = payload.get("cameras", [])
+        if not cameras:
+            raise ValueError("No cameras in JSON")
+    except Exception as e:
+        raise HTTPException(400, f"Invalid JSON data: {e}")
+
+    task_id = str(uuid.uuid4())
+    stage_dir = get_stage_dir(workspace, 3)
+    actual_seed = seed if seed >= 0 else random.randint(0, 2**32 - 1)
+
+    async with gpu_lock:
+        _init_progress(task_id)
+
+        try:
+            def _run_all_cameras():
+                from qwenimg2512.config import EditSettings, Config
+                from qwenimg2512.edit_worker import EditWorker
+                config = Config.load()
+                
+                for i, cam in enumerate(cameras):
+                    cam_name = cam.get("name", f"cam_{i}")
+                    combined_path = cam.get("combined", "")
+                    ao_path = cam.get("ao", "")
+                    if not combined_path or not os.path.exists(combined_path):
+                        continue
+
+                    progress_store[task_id].update({
+                        "stage": f"Batch {i+1}/{len(cameras)}: {cam_name}",
+                        "step": 0, "total": num_inference_steps
+                    })
+
+                    settings = EditSettings(
+                        prompt=prompt,
+                        negative_prompt="",
+                        aspect_ratio=aspect_ratio,
+                        num_inference_steps=num_inference_steps,
+                        true_cfg_scale=1.0,
+                        guidance_scale=1.0,
+                        seed=actual_seed,
+                        output_dir=str(stage_dir),
+                        sampler_name=sampler_name,
+                        schedule_name=schedule_name,
+                        ref_image_1=combined_path,
+                        ref_image_2=ao_path,
+                        ref_image_3="",
+                        ref_fit_mode_1="cover",
+                        ref_fit_mode_2="cover",
+                        ref_fit_mode_3="cover",
+                        lora_path=lora_path,
+                        lora_scale_start=lora_scale,
+                        lora_scale_end=lora_scale,
+                        lora_step_start=0,
+                        lora_step_end=-1,
+                        lora_path_2="",
+                        lora_scale_start_2=1.0,
+                        lora_scale_end_2=1.0,
+                        lora_step_start_2=0,
+                        lora_step_end_2=-1,
+                        ffn_chunk_size=2048,
+                        blocks_to_swap=0,
+                        attn_chunk_size=4096,
+                    )
+                    
+                    _pre_generation_gc()
+                    worker = EditWorker(settings, config.model_paths)
+                    worker._is_cancelled = False
+                    
+                    def _query_vram():
+                        try:
+                            import torch
+                            if torch.cuda.is_available():
+                                progress_store[task_id]["vram"] = {
+                                    f"gpu{j}": {"alloc": round(torch.cuda.memory_allocated(j)/(1024**3), 1), "total": round(torch.cuda.get_device_properties(j).total_mem / (1024**3), 1)}
+                                    for j in range(torch.cuda.device_count())
+                                }
+                        except: pass
+
+                    def on_progress(p_step, p_total, p_msg):
+                        progress_store[task_id].update({"step": p_step, "total": p_total, "message": p_msg})
+                        _query_vram()
+
+                    def on_stage(stage_text):
+                        progress_store[task_id]["stage"] = f"[{cam_name}] {stage_text}"
+                        _query_vram()
+
+                    worker.progress.connect(on_progress)
+                    worker.stage_changed.connect(on_stage)
+                    
+                    if hasattr(app, "worker_store"):
+                        app.worker_store[task_id] = worker
+                    
+                    try:
+                        worker._run_generation()
+                    finally:
+                        _cleanup_worker(worker, f"batch-{cam_name}")
+                        
+                    images = sorted([f for f in Path(stage_dir).iterdir() if f.suffix == '.png' and not f.name.startswith('.')], key=lambda f: f.stat().st_mtime, reverse=True)
+                    if images:
+                        filename = images[0].name
+                        params = {
+                            "prompt": prompt, "aspect_ratio": aspect_ratio, "sampler_name": sampler_name, "schedule_name": schedule_name,
+                            "num_inference_steps": num_inference_steps, "seed": actual_seed, "lora_path": lora_path, "lora_scale_start": lora_scale, "lora_scale_end": lora_scale,
+                            "lora_step_start": 0, "lora_step_end": -1, "lora_path_2": "", "lora_scale_start_2": 1.0, "lora_scale_end_2": 1.0, "lora_step_start_2": 0, "lora_step_end_2": -1,
+                            "ref_image_1": combined_path, "ref_image_2": ao_path, "ref_image_3": "", "ref_strength_1": 1.0, "ref_strength_2": 1.0, "ref_strength_3": 0.2, "ref_fit_mode_1": "cover", "ref_fit_mode_2": "cover", "ref_fit_mode_3": "cover",
+                            "ffn_chunk_size": 2048, "blocks_to_swap": 0, "attn_chunk_size": 4096, "output_dir": str(stage_dir), "tab_name": "Edit (2511)"
+                        }
+                        save_history_entry(workspace, 3, params, filename)
+
+                if hasattr(app, "worker_store"):
+                    app.worker_store.pop(task_id, None)
+
+            await asyncio.get_event_loop().run_in_executor(None, _run_all_cameras)
+            
+        except Exception as e:
+            progress_store[task_id] = {"done": True, "error": str(e)}
+            logger.exception("Batch failed")
+            raise HTTPException(500, str(e))
+
+    progress_store[task_id] = {"done": True, "stage": "Batch Complete!", "step": num_inference_steps, "total": num_inference_steps}
+    return {"task_id": task_id, "status": "completed"}
 
 
 # ---------------------------------------------------------------------------
