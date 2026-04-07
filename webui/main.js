@@ -806,6 +806,16 @@ function initBatchBlenderButton() {
   const fileInput = $('#batchBlenderInput');
   if (!btn || !fileInput) return;
 
+  // LoRA scale slider display
+  const loraSlider = $('#batch-lora-scale');
+  const loraVal = $('#batchLoraScaleVal');
+  if (loraSlider && loraVal) {
+    loraSlider.addEventListener('input', () => { loraVal.textContent = loraSlider.value; });
+  }
+
+  // Store parsed cameras for batch processing
+  let batchCameras = [];
+
   btn.addEventListener('click', () => {
     if (state.generating) return;
     fileInput.click();
@@ -814,8 +824,6 @@ function initBatchBlenderButton() {
   fileInput.addEventListener('change', async (e) => {
     const file = e.target.files[0];
     if (!file) return;
-
-    // Reset input so they can trigger again
     e.target.value = '';
 
     if (!state.workspace) {
@@ -825,52 +833,254 @@ function initBatchBlenderButton() {
 
     try {
       const text = await file.text();
-      // Ensure it is valid JSON
-      JSON.parse(text);
+      const payload = JSON.parse(text);
+      batchCameras = payload.cameras || [];
+      if (!batchCameras.length) { alert('No cameras found in JSON'); return; }
 
-      state.generating = true;
-      setGenerating(true);
-      updateProgress(0, 'Reading batch…', '', '');
+      renderCameraCards(batchCameras);
+    } catch (err) {
+      alert(`Failed to parse JSON: ${err.message}`);
+    }
+  });
 
+  function renderCameraCards(cameras) {
+    let container = document.getElementById('batchCameraCards');
+    if (!container) {
+      container = document.createElement('div');
+      container.id = 'batchCameraCards';
+      // Insert after the batch button
+      btn.parentNode.appendChild(container);
+    }
+    container.innerHTML = '';
+
+    // "Generate All" button
+    const genAllBtn = document.createElement('button');
+    genAllBtn.className = 'btn-primary';
+    genAllBtn.id = 'btnBatchGenerateAll';
+    genAllBtn.style.cssText = 'width:100%; margin:12px 0; display:flex; justify-content:center; gap:8px; align-items:center;';
+    genAllBtn.innerHTML = `
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <polygon points="5 3 19 12 5 21 5 3"/>
+      </svg>
+      Generate All (${cameras.length} cameras)
+    `;
+    container.appendChild(genAllBtn);
+
+    // Camera cards
+    cameras.forEach((cam, i) => {
+      const card = document.createElement('div');
+      card.className = 'batch-camera-card';
+      card.id = `cam-card-${i}`;
+      card.style.cssText = `
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 10px;
+        margin-bottom: 8px;
+        background: var(--surface);
+        transition: border-color 0.3s;
+      `;
+
+      const combinedThumb = cam.combined ? `/api/preview-local?path=${encodeURIComponent(cam.combined)}` : '';
+      const aoThumb = cam.ao ? `/api/preview-local?path=${encodeURIComponent(cam.ao)}` : '';
+
+      const resLabel = (cam.resolution_x && cam.resolution_y) ? `${cam.resolution_x}×${cam.resolution_y}` : '';
+
+      card.innerHTML = `
+        <div style="display:flex; align-items:center; gap:10px; margin-bottom:6px;">
+          <span style="font-weight:600; font-size:0.85rem; flex:1;">${cam.name || 'Camera ' + i}</span>
+          ${resLabel ? `<span style="font-size:0.65rem; opacity:0.5; font-family:monospace;">${resLabel}</span>` : ''}
+          <span class="cam-status" id="cam-status-${i}" style="font-size:0.7rem; padding:2px 8px; border-radius:10px; background:var(--border); color:var(--text-secondary);">Pending</span>
+        </div>
+        <div style="display:flex; gap:6px; margin-bottom:8px;">
+          ${combinedThumb ? `<div style="text-align:center; cursor:pointer;" class="cam-thumb" data-url="${combinedThumb}" data-label="${cam.name} – Combined">
+            <img src="${combinedThumb}" style="width:80px; height:60px; object-fit:cover; border-radius:4px; border:1px solid var(--border); transition:border-color 0.2s;" onmouseover="this.style.borderColor='var(--accent)'" onmouseout="this.style.borderColor='var(--border)'" />
+            <div style="font-size:0.6rem; opacity:0.5; margin-top:2px;">Combined</div>
+          </div>` : ''}
+          ${aoThumb ? `<div style="text-align:center; cursor:pointer;" class="cam-thumb" data-url="${aoThumb}" data-label="${cam.name} – AO">
+            <img src="${aoThumb}" style="width:80px; height:60px; object-fit:cover; border-radius:4px; border:1px solid var(--border); transition:border-color 0.2s;" onmouseover="this.style.borderColor='var(--accent)'" onmouseout="this.style.borderColor='var(--border)'" />
+            <div style="font-size:0.6rem; opacity:0.5; margin-top:2px;">AO</div>
+          </div>` : ''}
+          <div id="cam-result-${i}" style="text-align:center; width:80px;">
+            <div style="width:80px; height:60px; border-radius:4px; border:1px dashed var(--border); display:flex; align-items:center; justify-content:center; font-size:0.65rem; color:var(--text-secondary);">Result</div>
+          </div>
+        </div>
+        <button class="btn-secondary cam-gen-btn" data-cam-index="${i}" style="width:100%; font-size:0.78rem; padding:4px 8px;">
+          Generate
+        </button>
+      `;
+      container.appendChild(card);
+    });
+
+    // Individual generate buttons
+    container.querySelectorAll('.cam-gen-btn').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const idx = parseInt(btn.dataset.camIndex);
+        if (state.generating) return;
+        await processSingleCamera(idx, cameras[idx]);
+      });
+    });
+
+    // Thumbnail click → open in lightbox
+    container.querySelectorAll('.cam-thumb').forEach(thumb => {
+      thumb.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const url = thumb.dataset.url;
+        const label = thumb.dataset.label || 'Preview';
+        openLightbox(url, label, 5);
+      });
+    });
+
+    // Generate All
+    genAllBtn.addEventListener('click', async () => {
+      if (state.generating) return;
+      await processAllCameras(cameras);
+    });
+  }
+
+  async function processSingleCamera(idx, cam) {
+    if (!state.workspace) return;
+    state.generating = true;
+    setGenerating(true);
+    setCardStatus(idx, 'running', 'Running…');
+
+    try {
       const formData = new FormData();
       formData.append('workspace', state.workspace.name);
-      formData.append('json_data', text);
-      formData.append('prompt', $('#edit-prompt').value);
-      formData.append('aspect_ratio', $('#edit-aspect').value);
-      formData.append('sampler_name', $('#edit-sampler').value);
-      formData.append('schedule_name', $('#edit-schedule').value);
-      formData.append('num_inference_steps', $('#editSteps').value);
-      formData.append('lora_scale', $('#loraScale').value);
-      formData.append('lora_path', $('#edit-lora-path').value);
+      formData.append('camera_name', cam.name || `cam_${idx}`);
+      formData.append('combined_path', cam.combined || '');
+      formData.append('ao_path', cam.ao || '');
+      formData.append('prompt', $('#batch-prompt').value);
+      formData.append('aspect_ratio', $('#batch-aspect').value);
+      formData.append('sampler_name', $('#batch-sampler').value);
+      formData.append('schedule_name', $('#batch-schedule').value);
+      formData.append('num_inference_steps', $('#batch-steps').value);
+      formData.append('lora_scale', $('#batch-lora-scale').value);
+      const loraPath = $('#edit-lora-path') ? $('#edit-lora-path').value : '';
+      formData.append('lora_path', loraPath);
+      formData.append('seed', $('#batch-seed').value);
+      if (cam.resolution_x) formData.append('resolution_x', String(cam.resolution_x));
+      if (cam.resolution_y) formData.append('resolution_y', String(cam.resolution_y));
 
-      const seed = $('#edit-randomize').checked ? -1 : parseInt($('#edit-seed').value);
-      formData.append('seed', String(seed));
-
-      updateProgress(2, 'Sending batch to server…', '', '');
-
-      const resPromise = fetch('/api/batch/blender', { method: 'POST', body: formData });
+      updateProgress(0, `Processing ${cam.name}…`, '', '');
       const pollPromise = startProgressPolling();
 
-      const res = await resPromise;
+      const res = await fetch('/api/batch/blender/camera', { method: 'POST', body: formData });
       stopProgressPolling();
 
       if (!res.ok) {
         const err = await res.json();
-        throw new Error(err.detail || 'Batch processing failed');
+        throw new Error(err.detail || 'Generation failed');
       }
 
-      await res.json();
-      updateProgress(100, 'Batch Done!', '', '');
+      const data = await res.json();
+      setCardStatus(idx, 'done', 'Done ✓');
 
-      await loadStageGallery(3);
-      await loadHistory(3);
+      // Show result thumbnail
+      if (data.result_image) {
+        const resultDiv = document.getElementById(`cam-result-${idx}`);
+        if (resultDiv) {
+          resultDiv.innerHTML = `<div style="cursor:pointer;" onclick="openLightbox('${data.result_image}', '${cam.name} – Result', 5)">
+            <img src="${data.result_image}" style="width:80px; height:60px; object-fit:cover; border-radius:4px; border:1px solid var(--border); transition:border-color 0.2s;" onmouseover="this.style.borderColor='var(--accent)'" onmouseout="this.style.borderColor='var(--border)'" />
+            <div style="font-size:0.6rem; opacity:0.5; margin-top:2px;">Result</div>
+          </div>`;
+        }
+      }
+
+      updateProgress(100, `${cam.name} complete`, '', '');
+      await loadStageGallery(5);
+      await loadHistory(5);
     } catch (err) {
-      alert(`Batch Error: ${err.message}`);
+      setCardStatus(idx, 'error', 'Error ✗');
+      alert(`Error: ${err.message}`);
     } finally {
       state.generating = false;
       setGenerating(false);
     }
-  });
+  }
+
+  async function processAllCameras(cameras) {
+    if (!state.workspace) return;
+    state.generating = true;
+    setGenerating(true);
+
+    for (let i = 0; i < cameras.length; i++) {
+      const cam = cameras[i];
+      setCardStatus(i, 'running', `Running (${i+1}/${cameras.length})…`);
+
+      try {
+        const formData = new FormData();
+        formData.append('workspace', state.workspace.name);
+        formData.append('camera_name', cam.name || `cam_${i}`);
+        formData.append('combined_path', cam.combined || '');
+        formData.append('ao_path', cam.ao || '');
+        formData.append('prompt', $('#batch-prompt').value);
+        formData.append('aspect_ratio', $('#batch-aspect').value);
+        formData.append('sampler_name', $('#batch-sampler').value);
+        formData.append('schedule_name', $('#batch-schedule').value);
+        formData.append('num_inference_steps', $('#batch-steps').value);
+        formData.append('lora_scale', $('#batch-lora-scale').value);
+        const loraPath = $('#edit-lora-path') ? $('#edit-lora-path').value : '';
+        formData.append('lora_path', loraPath);
+        formData.append('seed', $('#batch-seed').value);
+        if (cam.resolution_x) formData.append('resolution_x', String(cam.resolution_x));
+        if (cam.resolution_y) formData.append('resolution_y', String(cam.resolution_y));
+
+        updateProgress(0, `Batch ${i+1}/${cameras.length}: ${cam.name}…`, '', '');
+        const pollPromise = startProgressPolling();
+
+        const res = await fetch('/api/batch/blender/camera', { method: 'POST', body: formData });
+        stopProgressPolling();
+
+        if (!res.ok) {
+          const err = await res.json();
+          setCardStatus(i, 'error', 'Error ✗');
+          console.error(`Camera ${cam.name} failed:`, err.detail);
+          continue;
+        }
+
+        const data = await res.json();
+        setCardStatus(i, 'done', 'Done ✓');
+
+        if (data.result_image) {
+          const resultDiv = document.getElementById(`cam-result-${i}`);
+          if (resultDiv) {
+            resultDiv.innerHTML = `<div style="cursor:pointer;" onclick="openLightbox('${data.result_image}', '${cam.name} – Result', 5)">
+              <img src="${data.result_image}" style="width:80px; height:60px; object-fit:cover; border-radius:4px; border:1px solid var(--border); transition:border-color 0.2s;" onmouseover="this.style.borderColor='var(--accent)'" onmouseout="this.style.borderColor='var(--border)'" />
+              <div style="font-size:0.6rem; opacity:0.5; margin-top:2px;">Result</div>
+            </div>`;
+          }
+        }
+      } catch (err) {
+        setCardStatus(i, 'error', 'Error ✗');
+        console.error(`Camera ${cam.name} error:`, err);
+      }
+    }
+
+    updateProgress(100, 'All cameras complete!', '', '');
+    await loadStageGallery(5);
+    await loadHistory(5);
+
+    state.generating = false;
+    setGenerating(false);
+  }
+
+  function setCardStatus(idx, status, text) {
+    const badge = document.getElementById(`cam-status-${idx}`);
+    const card = document.getElementById(`cam-card-${idx}`);
+    if (!badge) return;
+    badge.textContent = text;
+
+    const colors = {
+      pending:  { bg: 'var(--border)', color: 'var(--text-secondary)', border: 'var(--border)' },
+      running:  { bg: '#2563eb33', color: '#60a5fa', border: '#2563eb' },
+      done:     { bg: '#16a34a33', color: '#4ade80', border: '#16a34a' },
+      error:    { bg: '#dc262633', color: '#f87171', border: '#dc2626' },
+    };
+    const c = colors[status] || colors.pending;
+    badge.style.background = c.bg;
+    badge.style.color = c.color;
+    if (card) card.style.borderColor = c.border;
+  }
 }
 
 // ============================================================

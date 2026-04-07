@@ -472,20 +472,6 @@
                 Edit Image
               </button>
 
-              <div style="margin-top:12px; padding-top:12px; border-top:1px solid var(--border);">
-                <input type="file" id="batchBlenderInput" accept=".json" hidden />
-                <button class="btn-secondary" id="btnBatchBlender" style="width:100%; display:flex; justify-content:center; gap:8px;">
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <line x1="8" y1="6" x2="21" y2="6" />
-                    <line x1="8" y1="12" x2="21" y2="12" />
-                    <line x1="8" y1="18" x2="21" y2="18" />
-                    <line x1="3" y1="6" x2="3.01" y2="6" />
-                    <line x1="3" y1="12" x2="3.01" y2="12" />
-                    <line x1="3" y1="18" x2="3.01" y2="18" />
-                  </svg>
-                  Batch Render from Blender
-                </button>
-              </div>
             </div>
 
             <!-- History -->
@@ -712,6 +698,78 @@
                 </svg>
                 Export PNG with Alpha
               </button>
+
+              <!-- Batch Render from Blender -->
+              <div style="margin-top:20px; padding-top:16px; border-top:1px solid var(--border);">
+                <h4 style="margin:0 0 12px 0; font-size:0.85rem; text-transform:uppercase; letter-spacing:0.05em; opacity:0.6;">Batch from Blender</h4>
+
+                <div class="form-group">
+                  <label>Batch Prompt</label>
+                  <textarea id="batch-prompt" class="prompt-textarea" rows="3" style="font-size:0.82rem;">Add painterly texture to a camera view of the 3D model of the building in Picture 1. White background. Anime, neo-tokyo post-war style. Keep exact same structure as in Picture 2.</textarea>
+                </div>
+
+                <div class="form-group">
+                  <label>Aspect Ratio</label>
+                  <select id="batch-aspect" class="styled-select">
+                    <option value="9:16 (960x1664)" selected>9:16 (960×1664)</option>
+                    <option value="1:1 (1024x1024)">1:1 (1024×1024)</option>
+                    <option value="16:9 (1664x960)">16:9 (1664×960)</option>
+                    <option value="3:4 (960x1280)">3:4 (960×1280)</option>
+                    <option value="4:3 (1280x960)">4:3 (1280×960)</option>
+                  </select>
+                </div>
+
+                <div class="form-row" style="display:grid; grid-template-columns:1fr 1fr; gap:8px;">
+                  <div class="form-group">
+                    <label>Sampler</label>
+                    <select id="batch-sampler" class="styled-select">
+                      <option value="res_2s" selected>res_2s</option>
+                      <option value="res_2m">res_2m</option>
+                      <option value="euler">euler</option>
+                      <option value="euler_a">euler_a</option>
+                    </select>
+                  </div>
+                  <div class="form-group">
+                    <label>Scheduler</label>
+                    <select id="batch-schedule" class="styled-select">
+                      <option value="beta57" selected>beta57</option>
+                      <option value="linear">linear</option>
+                      <option value="cosine">cosine</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div class="form-row" style="display:grid; grid-template-columns:1fr 1fr; gap:8px;">
+                  <div class="form-group">
+                    <label>Steps</label>
+                    <input type="number" id="batch-steps" value="21" min="1" max="50" class="styled-input" />
+                  </div>
+                  <div class="form-group">
+                    <label>Seed (-1 = random)</label>
+                    <input type="number" id="batch-seed" value="-1" class="styled-input" />
+                  </div>
+                </div>
+
+                <div class="form-group">
+                  <label>LoRA Scale <span class="slider-val" id="batchLoraScaleVal">0.6</span></label>
+                  <div class="slider-row">
+                    <input type="range" id="batch-lora-scale" min="0" max="1" step="0.05" value="0.6" />
+                  </div>
+                </div>
+
+                <input type="file" id="batchBlenderInput" accept=".json" hidden />
+                <button class="btn-primary" id="btnBatchBlender" style="width:100%; display:flex; justify-content:center; gap:8px; margin-top:8px;">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <line x1="8" y1="6" x2="21" y2="6" />
+                    <line x1="8" y1="12" x2="21" y2="12" />
+                    <line x1="8" y1="18" x2="21" y2="18" />
+                    <line x1="3" y1="6" x2="3.01" y2="6" />
+                    <line x1="3" y1="12" x2="3.01" y2="12" />
+                    <line x1="3" y1="18" x2="3.01" y2="18" />
+                  </svg>
+                  Batch Render from Blender
+                </button>
+              </div>
             </div>
 
             <!-- History -->

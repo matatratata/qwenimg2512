@@ -497,13 +497,16 @@ class QWENBUILD_OT_render_passes(bpy.types.Operator):
 
         for i, cam in enumerate(cameras):
             print(f"[QwenBuild] Camera {i+1}/{len(cameras)}: {cam.name}")
+            cam_rx, cam_ry = _get_camera_resolution(cam, scene)
             paths = render_viewport_passes(context, cam, output_dir)
             all_paths.extend(paths)
             if len(paths) >= 2:
                 export_data["cameras"].append({
                     "name": cam.name,
                     "combined": paths[0],
-                    "ao": paths[1]
+                    "ao": paths[1],
+                    "resolution_x": cam_rx,
+                    "resolution_y": cam_ry
                 })
 
         import json
@@ -602,7 +605,7 @@ class QWENBUILD_OT_create_material(bpy.types.Operator):
         sg_project.get_dir_path = mock_get_dir_path
         sg_utils.get_dir_path = mock_get_dir_path
 
-        mat_id = "QB_AO"
+        mat_id = 0  # StableGen expects integer (stored in Math node float input)
         try:
             sg_project.project_image(context, mesh_objs, mat_id=mat_id, stop_index=len(cameras)-1)
         except Exception as e:
@@ -616,21 +619,30 @@ class QWENBUILD_OT_create_material(bpy.types.Operator):
             sg_project.get_dir_path = orig_get_dir_path
             sg_utils.get_dir_path = orig_get_dir_path
 
-        # Now link images into the generated tree
+        # Now link AO images into the generated TexImage nodes.
+        # Labels are formatted as "{camera_index}-{mat_id}", e.g. "0-0", "1-0"
         for obj in mesh_objs:
             mat = obj.active_material
-            if not mat or not mat.use_nodes: continue
+            if not mat or not mat.use_nodes:
+                continue
 
             mat.name = "QwenBuild_AO"
 
             for node in mat.node_tree.nodes:
-                if node.type == 'TEX_IMAGE' and node.label and node.label.endswith(f"-{mat_id}"):
+                if node.type != 'TEX_IMAGE' or not node.label:
+                    continue
+                # Match labels like "0-0", "3-0" etc.
+                parts = node.label.split('-')
+                if len(parts) == 2 and parts[1] == str(mat_id):
                     try:
-                        cam_idx = int(node.label.split('-')[0])
-                        matching_ao = next((img for idx, c, img in ao_images if cameras.index(c) == cam_idx), None)
-                        if matching_ao:
-                            node.image = matching_ao
-                    except ValueError:
+                        cam_idx = int(parts[0])
+                        # Find the AO image for this camera index
+                        for ao_idx, ao_cam, ao_img in ao_images:
+                            if ao_idx == cam_idx:
+                                node.image = ao_img
+                                print(f"[QwenBuild] Assigned AO {ao_cam.name} → TexImage node '{node.label}'")
+                                break
+                    except (ValueError, IndexError):
                         pass
 
         self.report({'INFO'}, f"Created projection material from AO passes")

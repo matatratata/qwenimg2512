@@ -835,144 +835,182 @@ def _run_generate(
 
 
 # ---------------------------------------------------------------------------
-# API: Batch Blender (Stage 03)
+# API: Preview local file (serves blender-exported images)
 # ---------------------------------------------------------------------------
-@app.post("/api/batch/blender")
-async def batch_blender(
+@app.get("/api/preview-local")
+async def preview_local(path: str):
+    """Serve an image file from disk for thumbnail preview."""
+    from fastapi.responses import FileResponse
+    if not path or not os.path.isfile(path):
+        raise HTTPException(404, "File not found")
+    ext = os.path.splitext(path)[1].lower()
+    if ext not in ('.png', '.jpg', '.jpeg', '.webp', '.bmp'):
+        raise HTTPException(400, "Not an image file")
+    return FileResponse(path, media_type=f"image/{ext.lstrip('.')}")
+
+
+# ---------------------------------------------------------------------------
+# API: Batch Blender – single camera (Stage 05)
+# ---------------------------------------------------------------------------
+def _match_aspect_ratio(width: int, height: int) -> str:
+    """Find the ASPECT_RATIOS key that best matches the given resolution."""
+    from qwenimg2512.config import ASPECT_RATIOS
+    target_ratio = width / height if height else 1.0
+    best_key = "9:16 (960x1664)"
+    best_dist = float('inf')
+    for key, (w, h) in ASPECT_RATIOS.items():
+        ratio = w / h if h else 1.0
+        # Prefer matching aspect ratio, then closeness in total pixels
+        ratio_dist = abs(ratio - target_ratio)
+        pixel_dist = abs(w * h - width * height) / 1_000_000
+        dist = ratio_dist * 10 + pixel_dist
+        if dist < best_dist:
+            best_dist = dist
+            best_key = key
+    return best_key
+
+
+@app.post("/api/batch/blender/camera")
+async def batch_blender_camera(
     workspace: str = Form(...),
-    json_data: str = Form(...),
+    camera_name: str = Form(...),
+    combined_path: str = Form(...),
+    ao_path: str = Form(""),
     prompt: str = Form(""),
     aspect_ratio: str = Form("9:16 (960x1664)"),
     sampler_name: str = Form("res_2s"),
     schedule_name: str = Form("beta57"),
-    num_inference_steps: int = Form(16),
+    num_inference_steps: int = Form(21),
     seed: int = Form(-1),
     lora_path: str = Form(""),
     lora_scale: float = Form(0.6),
+    resolution_x: int = Form(0),
+    resolution_y: int = Form(0),
 ):
-    import json
-    try:
-        payload = json.loads(json_data)
-        cameras = payload.get("cameras", [])
-        if not cameras:
-            raise ValueError("No cameras in JSON")
-    except Exception as e:
-        raise HTTPException(400, f"Invalid JSON data: {e}")
+    """Process a single camera from a blender batch."""
+    # If resolution provided, auto-match to closest aspect ratio
+    if resolution_x > 0 and resolution_y > 0:
+        aspect_ratio = _match_aspect_ratio(resolution_x, resolution_y)
+        logger.info(f"Camera {camera_name}: {resolution_x}x{resolution_y} → {aspect_ratio}")
+
+    if not combined_path or not os.path.exists(combined_path):
+        raise HTTPException(400, f"Combined image not found: {combined_path}")
 
     task_id = str(uuid.uuid4())
-    stage_dir = get_stage_dir(workspace, 3)
+    stage_dir = get_stage_dir(workspace, 5)
     actual_seed = seed if seed >= 0 else random.randint(0, 2**32 - 1)
 
     async with gpu_lock:
         _init_progress(task_id)
 
         try:
-            def _run_all_cameras():
+            def _run_single():
                 from qwenimg2512.config import EditSettings, Config
                 from qwenimg2512.edit_worker import EditWorker
                 config = Config.load()
-                
-                for i, cam in enumerate(cameras):
-                    cam_name = cam.get("name", f"cam_{i}")
-                    combined_path = cam.get("combined", "")
-                    ao_path = cam.get("ao", "")
-                    if not combined_path or not os.path.exists(combined_path):
-                        continue
 
-                    progress_store[task_id].update({
-                        "stage": f"Batch {i+1}/{len(cameras)}: {cam_name}",
-                        "step": 0, "total": num_inference_steps
-                    })
+                progress_store[task_id].update({
+                    "stage": f"Processing {camera_name}",
+                    "step": 0, "total": num_inference_steps
+                })
 
-                    settings = EditSettings(
-                        prompt=prompt,
-                        negative_prompt="",
-                        aspect_ratio=aspect_ratio,
-                        num_inference_steps=num_inference_steps,
-                        true_cfg_scale=1.0,
-                        guidance_scale=1.0,
-                        seed=actual_seed,
-                        output_dir=str(stage_dir),
-                        sampler_name=sampler_name,
-                        schedule_name=schedule_name,
-                        ref_image_1=combined_path,
-                        ref_image_2=ao_path,
-                        ref_image_3="",
-                        ref_fit_mode_1="cover",
-                        ref_fit_mode_2="cover",
-                        ref_fit_mode_3="cover",
-                        lora_path=lora_path,
-                        lora_scale_start=lora_scale,
-                        lora_scale_end=lora_scale,
-                        lora_step_start=0,
-                        lora_step_end=-1,
-                        lora_path_2="",
-                        lora_scale_start_2=1.0,
-                        lora_scale_end_2=1.0,
-                        lora_step_start_2=0,
-                        lora_step_end_2=-1,
-                        ffn_chunk_size=2048,
-                        blocks_to_swap=0,
-                        attn_chunk_size=4096,
-                    )
-                    
-                    _pre_generation_gc()
-                    worker = EditWorker(settings, config.model_paths)
-                    worker._is_cancelled = False
-                    
-                    def _query_vram():
-                        try:
-                            import torch
-                            if torch.cuda.is_available():
-                                progress_store[task_id]["vram"] = {
-                                    f"gpu{j}": {"alloc": round(torch.cuda.memory_allocated(j)/(1024**3), 1), "total": round(torch.cuda.get_device_properties(j).total_mem / (1024**3), 1)}
-                                    for j in range(torch.cuda.device_count())
-                                }
-                        except: pass
+                settings = EditSettings(
+                    prompt=prompt,
+                    negative_prompt="",
+                    aspect_ratio=aspect_ratio,
+                    num_inference_steps=num_inference_steps,
+                    true_cfg_scale=1.0,
+                    guidance_scale=1.0,
+                    seed=actual_seed,
+                    output_dir=str(stage_dir),
+                    sampler_name=sampler_name,
+                    schedule_name=schedule_name,
+                    ref_image_1=combined_path,
+                    ref_image_2=ao_path,
+                    ref_image_3="",
+                    ref_fit_mode_1="cover",
+                    ref_fit_mode_2="cover",
+                    ref_fit_mode_3="cover",
+                    lora_path=lora_path,
+                    lora_scale_start=lora_scale,
+                    lora_scale_end=lora_scale,
+                    lora_step_start=0,
+                    lora_step_end=-1,
+                    lora_path_2="",
+                    lora_scale_start_2=1.0,
+                    lora_scale_end_2=1.0,
+                    lora_step_start_2=0,
+                    lora_step_end_2=-1,
+                    ffn_chunk_size=2048,
+                    blocks_to_swap=0,
+                    attn_chunk_size=4096,
+                )
 
-                    def on_progress(p_step, p_total, p_msg):
-                        progress_store[task_id].update({"step": p_step, "total": p_total, "message": p_msg})
-                        _query_vram()
+                _pre_generation_gc()
+                worker = EditWorker(settings, config.model_paths)
+                worker._is_cancelled = False
 
-                    def on_stage(stage_text):
-                        progress_store[task_id]["stage"] = f"[{cam_name}] {stage_text}"
-                        _query_vram()
-
-                    worker.progress.connect(on_progress)
-                    worker.stage_changed.connect(on_stage)
-                    
-                    if hasattr(app, "worker_store"):
-                        app.worker_store[task_id] = worker
-                    
+                def _query_vram():
                     try:
-                        worker._run_generation()
-                    finally:
-                        _cleanup_worker(worker, f"batch-{cam_name}")
-                        
-                    images = sorted([f for f in Path(stage_dir).iterdir() if f.suffix == '.png' and not f.name.startswith('.')], key=lambda f: f.stat().st_mtime, reverse=True)
-                    if images:
-                        filename = images[0].name
-                        params = {
-                            "prompt": prompt, "aspect_ratio": aspect_ratio, "sampler_name": sampler_name, "schedule_name": schedule_name,
-                            "num_inference_steps": num_inference_steps, "seed": actual_seed, "lora_path": lora_path, "lora_scale_start": lora_scale, "lora_scale_end": lora_scale,
-                            "lora_step_start": 0, "lora_step_end": -1, "lora_path_2": "", "lora_scale_start_2": 1.0, "lora_scale_end_2": 1.0, "lora_step_start_2": 0, "lora_step_end_2": -1,
-                            "ref_image_1": combined_path, "ref_image_2": ao_path, "ref_image_3": "", "ref_strength_1": 1.0, "ref_strength_2": 1.0, "ref_strength_3": 0.2, "ref_fit_mode_1": "cover", "ref_fit_mode_2": "cover", "ref_fit_mode_3": "cover",
-                            "ffn_chunk_size": 2048, "blocks_to_swap": 0, "attn_chunk_size": 4096, "output_dir": str(stage_dir), "tab_name": "Edit (2511)"
-                        }
-                        save_history_entry(workspace, 3, params, filename)
+                        import torch
+                        if torch.cuda.is_available():
+                            progress_store[task_id]["vram"] = {
+                                f"gpu{j}": {"alloc": round(torch.cuda.memory_allocated(j)/(1024**3), 1), "total": round(torch.cuda.get_device_properties(j).total_mem / (1024**3), 1)}
+                                for j in range(torch.cuda.device_count())
+                            }
+                    except: pass
+
+                def on_progress(p_step, p_total, p_msg):
+                    progress_store[task_id].update({"step": p_step, "total": p_total, "message": p_msg})
+                    _query_vram()
+
+                def on_stage(stage_text):
+                    progress_store[task_id]["stage"] = f"[{camera_name}] {stage_text}"
+                    _query_vram()
+
+                worker.progress_updated.connect(on_progress)
+                worker.stage_changed.connect(on_stage)
 
                 if hasattr(app, "worker_store"):
-                    app.worker_store.pop(task_id, None)
+                    app.worker_store[task_id] = worker
 
-            await asyncio.get_event_loop().run_in_executor(None, _run_all_cameras)
-            
+                result_filename = None
+                try:
+                    worker._run_generation()
+                finally:
+                    _cleanup_worker(worker, f"batch-{camera_name}")
+
+                images = sorted([f for f in Path(stage_dir).iterdir() if f.suffix == '.png' and not f.name.startswith('.')], key=lambda f: f.stat().st_mtime, reverse=True)
+                if images:
+                    result_filename = images[0].name
+                    params = {
+                        "prompt": prompt, "aspect_ratio": aspect_ratio, "sampler_name": sampler_name, "schedule_name": schedule_name,
+                        "num_inference_steps": num_inference_steps, "seed": actual_seed, "lora_path": lora_path, "lora_scale_start": lora_scale, "lora_scale_end": lora_scale,
+                        "lora_step_start": 0, "lora_step_end": -1, "lora_path_2": "", "lora_scale_start_2": 1.0, "lora_scale_end_2": 1.0, "lora_step_start_2": 0, "lora_step_end_2": -1,
+                        "ref_image_1": combined_path, "ref_image_2": ao_path, "ref_image_3": "", "ref_strength_1": 1.0, "ref_strength_2": 1.0, "ref_strength_3": 0.2, "ref_fit_mode_1": "cover", "ref_fit_mode_2": "cover", "ref_fit_mode_3": "cover",
+                        "ffn_chunk_size": 2048, "blocks_to_swap": 0, "attn_chunk_size": 4096, "output_dir": str(stage_dir), "tab_name": "Batch Blender"
+                    }
+                    save_history_entry(workspace, 5, params, result_filename)
+                return result_filename
+
+            if hasattr(app, "worker_store"):
+                app.worker_store[task_id] = None
+
+            result = await asyncio.get_event_loop().run_in_executor(None, _run_single)
+
         except Exception as e:
             progress_store[task_id] = {"done": True, "error": str(e)}
-            logger.exception("Batch failed")
+            logger.exception("Batch camera failed")
             raise HTTPException(500, str(e))
 
-    progress_store[task_id] = {"done": True, "stage": "Batch Complete!", "step": num_inference_steps, "total": num_inference_steps}
-    return {"task_id": task_id, "status": "completed"}
+    progress_store[task_id] = {"done": True, "stage": f"{camera_name} complete", "step": num_inference_steps, "total": num_inference_steps}
+
+    result_url = ""
+    if result:
+        result_url = f"/api/workspaces/{workspace}/stages/5/images/{result}"
+
+    return {"task_id": task_id, "status": "completed", "camera": camera_name, "result_image": result_url}
+
 
 
 # ---------------------------------------------------------------------------
