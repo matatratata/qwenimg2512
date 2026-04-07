@@ -1115,9 +1115,9 @@ def _run_edit(
     lora_path: str = "",
     lora_scale: float = 0.6,
 ) -> str:
-    """Synchronous edit using existing Edit2509Worker logic."""
+    """Synchronous edit using Edit 2511 worker + white background."""
     from PIL import Image
-    from qwenimg2512.config import ASPECT_RATIOS, Edit2509Settings, Config
+    from qwenimg2512.config import ASPECT_RATIOS, EditSettings, Config
 
     _pre_generation_gc()
     config = Config.load()
@@ -1130,7 +1130,7 @@ def _run_edit(
     white_img.save(str(white_path))
     logger.info(f"White BG image: {white_path} ({width}x{height})")
 
-    settings = Edit2509Settings(
+    settings = EditSettings(
         prompt=prompt,
         negative_prompt="",
         aspect_ratio=aspect_ratio,
@@ -1157,23 +1157,26 @@ def _run_edit(
         lora_scale_end_2=1.0,
         lora_step_start_2=0,
         lora_step_end_2=-1,
+        ref_strength_1=1.0,
+        ref_strength_2=1.0,
+        ref_strength_3=0.15,
         ffn_chunk_size=2048,
         blocks_to_swap=0,
         attn_chunk_size=4096,
     )
 
-    logger.info(f"Edit settings: ref1={settings.ref_image_1}, ref2={settings.ref_image_2}, ref3={settings.ref_image_3}")
+    logger.info(f"Edit settings: ref1={settings.ref_image_1}, ref2={settings.ref_image_2}, lora={settings.lora_path}")
 
-    from qwenimg2512.edit_2509_worker import Edit2509Worker
+    from qwenimg2512.edit_worker import EditWorker
 
-    worker = Edit2509Worker(settings, config.model_paths)
+    worker = EditWorker(settings, config.model_paths)
     worker._is_cancelled = False
     _connect_worker_progress(worker, task_id)
 
     try:
         worker._run_generation()
     finally:
-        _cleanup_worker(worker, "stage02-edit")
+        _cleanup_worker(worker, "stage03-edit")
 
     # Find the output file
     output_path = Path(output_dir)
