@@ -246,6 +246,19 @@ snapshot_download('Qwen/Qwen-Image-Edit-2511', local_dir='${BASE_2511}',
             "https://huggingface.co/lightx2v/Qwen-Image-Edit-2511-Lightning/resolve/main/Qwen-Image-Edit-2511-Lightning-8steps-V1.0-bf16.safetensors"
         echo "  ✅ Lightning LoRA downloaded."
     fi
+
+    # 5g. ControlNet Union (Stage 02)
+    CN_DIR="${MODEL_DIR}/Qwen-Image-2512-Fun-Controlnet-Union"
+    CN_FILE="${CN_DIR}/Qwen-Image-2512-Fun-Controlnet-Union-2602.safetensors"
+    if [ -f "$CN_FILE" ]; then
+        echo "  ControlNet Union already downloaded."
+    else
+        echo "  Downloading ControlNet Union (~1.7 GB)..."
+        mkdir -p "$CN_DIR"
+        curl -L -o "$CN_FILE" \
+            "https://huggingface.co/alibaba-pai/Qwen-Image-2512-Fun-Controlnet-Union/resolve/main/Qwen-Image-2512-Fun-Controlnet-Union-2602.safetensors"
+        echo "  ✅ ControlNet Union downloaded."
+    fi
 fi
 
 # ---------------------------------------------------------------------------
@@ -266,7 +279,7 @@ cat > "${CONFIG_DIR}/settings.json" << CFGEOF
     "vl_model": "",
     "mmproj": "",
     "vae": "",
-    "controlnet_path": "",
+    "controlnet_path": "${MODEL_DIR}/Qwen-Image-2512-Fun-Controlnet-Union/Qwen-Image-2512-Fun-Controlnet-Union-2602.safetensors",
     "base_model_dir": "${MODEL_DIR}/Qwen-Image-2512",
     "edit_gguf": "${MODEL_DIR}/Qwen-Image-Edit-2511-GGUF/qwen-image-edit-2511-Q8_0.gguf",
     "edit_base_model_dir": "${MODEL_DIR}/Qwen-Image-Edit-2511",
