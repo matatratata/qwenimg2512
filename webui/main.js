@@ -33,6 +33,7 @@ function initAll() {
     ['initCollapsibles', initCollapsibles],
     ['initUploads', initUploads],
     ['initModelReferences', loadModelReferences],
+    ['initBundledRefImages', loadBundledRefImages],
     ['initModelButton', initModelButton],
     ['initUseStage1ForControl', initUseStage1ForControl],
     ['initGenerateButton', initGenerateButton],
@@ -493,6 +494,8 @@ async function loadModelReferences() {
           $('#modelRefUpload').classList.add('has-image');
 
           list.querySelectorAll('img').forEach(el => el.style.borderColor = 'transparent');
+          const bundledRefs = $('#bundledRefList');
+          if (bundledRefs) bundledRefs.querySelectorAll('img').forEach(el => el.style.borderColor = 'transparent');
           img.style.borderColor = 'var(--accent)';
         } catch (err) {
           console.error('Error loading reference:', err);
@@ -503,6 +506,70 @@ async function loadModelReferences() {
     });
   } catch (err) {
     console.error('Failed to load model references:', err);
+  }
+}
+
+// ============================================================
+// BUNDLED REFERENCE IMAGES (repo ref_images/ folder)
+// ============================================================
+async function loadBundledRefImages() {
+  try {
+    const res = await fetch('/api/ref_images');
+    const data = await res.json();
+    const images = data.images || [];
+
+    const list = $('#bundledRefList');
+    if (images.length === 0) {
+      list.style.display = 'none';
+      return;
+    }
+
+    list.style.display = 'flex';
+    list.innerHTML = '';
+
+    images.forEach(filename => {
+      const imgUrl = `/api/ref_images/${encodeURIComponent(filename)}`;
+      const img = document.createElement('img');
+      img.src = imgUrl;
+      img.alt = filename;
+      img.style.height = '52px';
+      img.style.width = '52px';
+      img.style.objectFit = 'cover';
+      img.style.borderRadius = 'var(--radius-sm)';
+      img.style.cursor = 'pointer';
+      img.style.border = '2px solid transparent';
+      img.style.transition = 'border-color 0.2s, transform 0.15s';
+      img.title = filename.replace(/\.[^.]+$/, '').replace(/_/g, ' ');
+
+      img.addEventListener('mouseenter', () => { img.style.transform = 'scale(1.08)'; });
+      img.addEventListener('mouseleave', () => { img.style.transform = ''; });
+
+      img.addEventListener('click', async () => {
+        try {
+          const response = await fetch(imgUrl);
+          const blob = await response.blob();
+          const file = new File([blob], filename, { type: blob.type });
+          state.modelRefImage = file;
+
+          const preview = $('#modelRefPreview');
+          preview.src = URL.createObjectURL(blob);
+          preview.style.display = 'block';
+          $('#modelRefUpload').classList.add('has-image');
+
+          // Clear all ref selection borders (both bundled + workspace)
+          list.querySelectorAll('img').forEach(el => el.style.borderColor = 'transparent');
+          const wsRefs = $('#modelReferenceList');
+          if (wsRefs) wsRefs.querySelectorAll('img').forEach(el => el.style.borderColor = 'transparent');
+          img.style.borderColor = 'var(--accent)';
+        } catch (err) {
+          console.error('Error loading bundled reference:', err);
+        }
+      });
+
+      list.appendChild(img);
+    });
+  } catch (err) {
+    console.error('Failed to load bundled ref images:', err);
   }
 }
 

@@ -522,6 +522,34 @@ async def get_model_reference(filename: str):
 
 
 # ---------------------------------------------------------------------------
+# API: Bundled Reference Images (from repo ref_images/ folder)
+# ---------------------------------------------------------------------------
+REF_IMAGES_DIR = PROJECT_ROOT / "ref_images"
+
+
+@app.get("/api/ref_images")
+async def list_ref_images():
+    """List bundled reference images shipped with the repo."""
+    if not REF_IMAGES_DIR.exists():
+        return {"images": []}
+
+    images = sorted(
+        [f.name for f in REF_IMAGES_DIR.iterdir()
+         if f.is_file() and f.suffix.lower() in ('.png', '.jpg', '.jpeg', '.webp')],
+    )
+    return {"images": images}
+
+
+@app.get("/api/ref_images/{filename}")
+async def get_ref_image(filename: str):
+    """Serve a specific bundled reference image."""
+    filepath = REF_IMAGES_DIR / filename
+    if not filepath.exists() or not filepath.is_file():
+        raise HTTPException(404)
+    return FileResponse(str(filepath))
+
+
+# ---------------------------------------------------------------------------
 # API: History
 # ---------------------------------------------------------------------------
 @app.get("/api/workspaces/{name}/history")

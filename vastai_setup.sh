@@ -182,14 +182,14 @@ hf_hub_download('unsloth/Qwen-Image-2512-GGUF', 'qwen-image-2512-Q8_0.gguf', loc
 
     # 5b. Qwen-Image-2512 Base (scheduler, tokenizer, text_encoder, vae)
     BASE_2512="${MODEL_DIR}/Qwen-Image-2512"
-    if [ -d "${BASE_2512}" ] && [ -f "${BASE_2512}/model_index.json" ]; then
+    if [ -f "${BASE_2512}/vae/diffusion_pytorch_model.safetensors" ]; then
         echo "  Qwen-Image-2512 base already downloaded."
     else
         echo "  Downloading Qwen-Image-2512 base components..."
         python -c "
 from huggingface_hub import snapshot_download
 snapshot_download('Qwen/Qwen-Image-2512', local_dir='${BASE_2512}',
-    allow_patterns=['scheduler/*', 'tokenizer/*', 'text_encoder/*', 'vae/*', 'model_index.json'])
+    allow_patterns=['scheduler/*', 'tokenizer/*', 'text_encoder/*', 'vae/*', 'model_index.json', 'transformer/config.json'])
 "
         echo "  ✅ Qwen-Image-2512 base downloaded."
     fi
@@ -210,7 +210,7 @@ hf_hub_download('unsloth/Qwen-Image-Edit-2511-GGUF', 'qwen-image-edit-2511-Q8_0.
 
     # 5d. Qwen-Image-Edit-2511 Base (scheduler, tokenizer, text_encoder, vae, processor, transformer config)
     BASE_2511="${MODEL_DIR}/Qwen-Image-Edit-2511"
-    if [ -d "${BASE_2511}" ] && [ -f "${BASE_2511}/model_index.json" ]; then
+    if [ -f "${BASE_2511}/vae/diffusion_pytorch_model.safetensors" ]; then
         echo "  Qwen-Image-Edit-2511 base already downloaded."
     else
         echo "  Downloading Qwen-Image-Edit-2511 base components..."
