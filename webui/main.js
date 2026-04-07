@@ -1716,7 +1716,7 @@ function openLightbox(imageUrl, filename, stage) {
   const compareBtn = $('#lightboxCompareToggle');
   const refImageForStage = {
     2: state.refImage1,
-    3: state.s3RefImage,
+    3: state.refImage1,
     4: state.s4RefImage,
     5: state.s5SourceImage,
   };
@@ -1745,13 +1745,11 @@ function closeLightbox() {
 function setComparePosition(pct) {
   const clip = $('#compareClip');
   const divider = $('#compareDivider');
-  clip.style.width = `${pct}%`;
+  // Use clip-path on the clip div to reveal only the left portion of the
+  // full-size before image.  This avoids the old width-scaling trick that
+  // caused the reference to misalign and bleed into the output edge.
+  clip.style.clipPath = `inset(0 ${100 - pct}% 0 0)`;
   divider.style.left = `${pct}%`;
-  // Adjust before image width to maintain proper scaling
-  const before = $('#compareBefore');
-  if (pct > 0) {
-    before.style.width = `${(100 / pct) * 100}%`;
-  }
 }
 
 function initCompareDrag() {
