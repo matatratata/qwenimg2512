@@ -863,18 +863,41 @@ def _run_generate(
 
 
 # ---------------------------------------------------------------------------
-# API: Preview local file (serves blender-exported images)
+# API: Batch Blender — upload passes (Stage 05)
 # ---------------------------------------------------------------------------
-@app.get("/api/preview-local")
-async def preview_local(path: str):
-    """Serve an image file from disk for thumbnail preview."""
+@app.post("/api/batch/blender/upload")
+async def batch_blender_upload(
+    workspace: str = Form(...),
+    files: list[UploadFile] = File(...),
+):
+    """Upload blender-rendered PNG passes to the workspace."""
+    passes_dir = get_stage_dir(workspace, 5) / "blender_passes"
+    passes_dir.mkdir(parents=True, exist_ok=True)
+
+    uploaded = {}
+    for f in files:
+        if not f.filename:
+            continue
+        safe_name = Path(f.filename).name  # strip any directory components
+        dest = passes_dir / safe_name
+        data = await f.read()
+        dest.write_bytes(data)
+        uploaded[safe_name] = str(dest)
+        logger.info(f"Uploaded blender pass: {dest} ({len(data)} bytes)")
+
+    return {"uploaded": uploaded, "passes_dir": str(passes_dir), "count": len(uploaded)}
+
+
+@app.get("/api/batch/blender/passes/{workspace}/{filename}")
+async def batch_blender_pass(workspace: str, filename: str):
+    """Serve an uploaded blender pass image."""
     from fastapi.responses import FileResponse
-    if not path or not os.path.isfile(path):
-        raise HTTPException(404, "File not found")
-    ext = os.path.splitext(path)[1].lower()
-    if ext not in ('.png', '.jpg', '.jpeg', '.webp', '.bmp'):
-        raise HTTPException(400, "Not an image file")
-    return FileResponse(path, media_type=f"image/{ext.lstrip('.')}")
+    safe_name = Path(filename).name
+    passes_dir = get_stage_dir(workspace, 5) / "blender_passes"
+    filepath = passes_dir / safe_name
+    if not filepath.is_file():
+        raise HTTPException(404, f"Pass not found: {safe_name}")
+    return FileResponse(str(filepath), media_type="image/png")
 
 
 # ---------------------------------------------------------------------------
@@ -896,6 +919,18 @@ def _match_aspect_ratio(width: int, height: int) -> str:
             best_dist = dist
             best_key = key
     return best_key
+
+
+def _resolve_blender_pass(workspace: str, filename: str) -> str:
+    """Resolve a relative blender pass filename to an absolute server path."""
+    if not filename:
+        return ""
+    safe_name = Path(filename).name
+    passes_dir = get_stage_dir(workspace, 5) / "blender_passes"
+    filepath = passes_dir / safe_name
+    if not filepath.is_file():
+        raise HTTPException(400, f"Blender pass not found: {safe_name}. Upload passes first.")
+    return str(filepath)
 
 
 @app.post("/api/batch/blender/camera")
@@ -921,8 +956,9 @@ async def batch_blender_camera(
         aspect_ratio = _match_aspect_ratio(resolution_x, resolution_y)
         logger.info(f"Camera {camera_name}: {resolution_x}x{resolution_y} → {aspect_ratio}")
 
-    if not combined_path or not os.path.exists(combined_path):
-        raise HTTPException(400, f"Combined image not found: {combined_path}")
+    # Resolve relative filenames against blender_passes/
+    combined_abs = _resolve_blender_pass(workspace, combined_path)
+    ao_abs = _resolve_blender_pass(workspace, ao_path) if ao_path else ""
 
     task_id = str(uuid.uuid4())
     stage_dir = get_stage_dir(workspace, 5)
@@ -953,8 +989,8 @@ async def batch_blender_camera(
                     output_dir=str(stage_dir),
                     sampler_name=sampler_name,
                     schedule_name=schedule_name,
-                    ref_image_1=combined_path,
-                    ref_image_2=ao_path,
+                    ref_image_1=combined_abs,
+                    ref_image_2=ao_abs,
                     ref_image_3="",
                     ref_fit_mode_1="cover",
                     ref_fit_mode_2="cover",

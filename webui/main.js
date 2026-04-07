@@ -889,8 +889,8 @@ function initBatchBlenderButton() {
   });
 
   fileInput.addEventListener('change', async (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
+    const files = Array.from(e.target.files);
+    if (!files.length) return;
     e.target.value = '';
 
     if (!state.workspace) {
@@ -898,17 +898,69 @@ function initBatchBlenderButton() {
       return;
     }
 
+    // Separate JSON from PNG files
+    const jsonFile = files.find(f => f.name.endsWith('.json'));
+    const pngFiles = files.filter(f => f.name.endsWith('.png'));
+
+    if (!jsonFile) {
+      alert('No qwen_export.json found in selected files');
+      return;
+    }
+
     try {
-      const text = await file.text();
+      // Parse JSON
+      const text = await jsonFile.text();
       const payload = JSON.parse(text);
       batchCameras = payload.cameras || [];
       if (!batchCameras.length) { alert('No cameras found in JSON'); return; }
 
+      // Upload PNGs to server
+      if (pngFiles.length > 0) {
+        btn.disabled = true;
+        btn.textContent = `Uploading ${pngFiles.length} passes…`;
+
+        const uploadForm = new FormData();
+        uploadForm.append('workspace', state.workspace.name);
+        for (const png of pngFiles) {
+          uploadForm.append('files', png);
+        }
+
+        const uploadRes = await fetch('/api/batch/blender/upload', {
+          method: 'POST', body: uploadForm
+        });
+
+        if (!uploadRes.ok) {
+          const err = await uploadRes.json();
+          throw new Error(err.detail || 'Upload failed');
+        }
+
+        const uploadData = await uploadRes.json();
+        console.log(`Uploaded ${uploadData.count} blender passes`);
+        btn.disabled = false;
+        btn.innerHTML = `
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="8" y1="6" x2="21" y2="6" />
+            <line x1="8" y1="12" x2="21" y2="12" />
+            <line x1="8" y1="18" x2="21" y2="18" />
+            <line x1="3" y1="6" x2="3.01" y2="6" />
+            <line x1="3" y1="12" x2="3.01" y2="12" />
+            <line x1="3" y1="18" x2="3.01" y2="18" />
+          </svg>
+          Upload &amp; Batch from Blender
+        `;
+      }
+
       renderCameraCards(batchCameras);
     } catch (err) {
-      alert(`Failed to parse JSON: ${err.message}`);
+      btn.disabled = false;
+      alert(`Failed: ${err.message}`);
     }
   });
+
+  function passUrl(filename) {
+    if (!filename || !state.workspace) return '';
+    return `/api/batch/blender/passes/${encodeURIComponent(state.workspace.name)}/${encodeURIComponent(filename)}`;
+  }
 
   function renderCameraCards(cameras) {
     let container = document.getElementById('batchCameraCards');
@@ -947,8 +999,8 @@ function initBatchBlenderButton() {
         transition: border-color 0.3s;
       `;
 
-      const combinedThumb = cam.combined ? `/api/preview-local?path=${encodeURIComponent(cam.combined)}` : '';
-      const aoThumb = cam.ao ? `/api/preview-local?path=${encodeURIComponent(cam.ao)}` : '';
+      const combinedThumb = cam.combined ? passUrl(cam.combined) : '';
+      const aoThumb = cam.ao ? passUrl(cam.ao) : '';
 
       const resLabel = (cam.resolution_x && cam.resolution_y) ? `${cam.resolution_x}×${cam.resolution_y}` : '';
 

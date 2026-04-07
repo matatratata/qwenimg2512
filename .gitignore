@@ -10,3 +10,4 @@ webui/node_modules
 blender_plugin/qwenbuild/__pycache__
 webui/.stablegen_tmp
 blender_plugin/qwenbuild/sg_core/__pycache__
+webui/dist/

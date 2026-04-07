@@ -503,8 +503,8 @@ class QWENBUILD_OT_render_passes(bpy.types.Operator):
             if len(paths) >= 2:
                 export_data["cameras"].append({
                     "name": cam.name,
-                    "combined": paths[0],
-                    "ao": paths[1],
+                    "combined": os.path.basename(paths[0]),
+                    "ao": os.path.basename(paths[1]),
                     "resolution_x": cam_rx,
                     "resolution_y": cam_ry
                 })
