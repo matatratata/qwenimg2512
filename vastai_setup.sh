@@ -118,8 +118,8 @@ else
     echo "  Installing project + webui extras..."
     uv pip install -e ".[webui]"
 
-    echo "  Installing diffusers from git (required)..."
-    uv pip install git+https://github.com/huggingface/diffusers.git
+    echo "  Installing diffusers from git (pinned commit)..."
+    uv pip install git+https://github.com/huggingface/diffusers.git@f2be8bd6b3dc4035bd989dc467f15d86bf3c9c12
 
     echo "  Installing hf_transfer for fast downloads..."
     uv pip install "huggingface_hub[hf_transfer]"
