@@ -259,6 +259,20 @@ snapshot_download('Qwen/Qwen-Image-Edit-2511', local_dir='${BASE_2511}',
             "https://huggingface.co/alibaba-pai/Qwen-Image-2512-Fun-Controlnet-Union/resolve/main/Qwen-Image-2512-Fun-Controlnet-Union-2602.safetensors"
         echo "  ✅ ControlNet Union downloaded."
     fi
+
+    # 5h. Qwen-Image-Edit-2509 (full diffusers — Stage 03 uses BnB 8-bit)
+    BASE_2509="${MODEL_DIR}/Qwen-Image-Edit-2509"
+    if [ -f "${BASE_2509}/transformer/diffusion_pytorch_model.safetensors" ]; then
+        echo "  Qwen-Image-Edit-2509 already downloaded."
+    else
+        echo "  Downloading Qwen-Image-Edit-2509 (full diffusers, ~16 GB)..."
+        python -c "
+from huggingface_hub import snapshot_download
+snapshot_download('Qwen/Qwen-Image-Edit-2509', local_dir='${BASE_2509}',
+    allow_patterns=['scheduler/*', 'tokenizer/*', 'text_encoder/*', 'vae/*', 'model_index.json', 'transformer/*', 'processor/*'])
+"
+        echo "  ✅ Qwen-Image-Edit-2509 downloaded."
+    fi
 fi
 
 # ---------------------------------------------------------------------------
@@ -284,7 +298,7 @@ cat > "${CONFIG_DIR}/settings.json" << CFGEOF
     "edit_gguf": "${MODEL_DIR}/Qwen-Image-Edit-2511-GGUF/qwen-image-edit-2511-Q8_0.gguf",
     "edit_base_model_dir": "${MODEL_DIR}/Qwen-Image-Edit-2511",
     "edit_2509_gguf": "",
-    "edit_2509_base_model_dir": "",
+    "edit_2509_base_model_dir": "${MODEL_DIR}/Qwen-Image-Edit-2509",
     "edit_2509_telestyle_fused_dir": "",
     "telestyle_lora": "${MODEL_DIR}/LoRAs/restoration_v2.safetensors",
     "telestyle_speedup": "${MODEL_DIR}/LoRAs/Qwen-Image-Edit-2511-Lightning-8steps-V1.0-bf16.safetensors",
