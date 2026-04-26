@@ -883,10 +883,77 @@ function initBatchBlenderButton() {
   // Store parsed cameras for batch processing
   let batchCameras = [];
 
+  // --- Hidden input for PNG-only second-pass pick ---
+  let pngPickerInput = document.getElementById('_batchPngPicker');
+  if (!pngPickerInput) {
+    pngPickerInput = document.createElement('input');
+    pngPickerInput.type = 'file';
+    pngPickerInput.id = '_batchPngPicker';
+    pngPickerInput.accept = '.png';
+    pngPickerInput.multiple = true;
+    pngPickerInput.hidden = true;
+    document.body.appendChild(pngPickerInput);
+  }
+
   btn.addEventListener('click', () => {
     if (state.generating) return;
     fileInput.click();
   });
+
+  /**
+   * Collect all unique PNG filenames referenced by camera entries.
+   */
+  function getRequiredPngs(cameras) {
+    const needed = new Set();
+    for (const cam of cameras) {
+      if (cam.combined) needed.add(cam.combined);
+      if (cam.ao) needed.add(cam.ao);
+    }
+    return needed;
+  }
+
+  /**
+   * Upload an array of File objects to the server blender_passes dir.
+   * Returns the parsed response JSON.
+   */
+  async function uploadPngs(pngFiles) {
+    btn.disabled = true;
+    btn.textContent = `Uploading ${pngFiles.length} passes…`;
+
+    const uploadForm = new FormData();
+    uploadForm.append('workspace', state.workspace.name);
+    for (const png of pngFiles) {
+      uploadForm.append('files', png);
+    }
+
+    const uploadRes = await fetch('/api/batch/blender/upload', {
+      method: 'POST', body: uploadForm
+    });
+
+    if (!uploadRes.ok) {
+      const err = await uploadRes.json();
+      throw new Error(err.detail || 'Upload failed');
+    }
+
+    const uploadData = await uploadRes.json();
+    console.log(`Uploaded ${uploadData.count} blender passes`);
+    return uploadData;
+  }
+
+  function resetBtn() {
+    btn.disabled = false;
+    btn.innerHTML = `
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <line x1="8" y1="6" x2="21" y2="6" />
+        <line x1="8" y1="12" x2="21" y2="12" />
+        <line x1="8" y1="18" x2="21" y2="18" />
+        <line x1="3" y1="6" x2="3.01" y2="6" />
+        <line x1="3" y1="12" x2="3.01" y2="12" />
+        <line x1="3" y1="18" x2="3.01" y2="18" />
+      </svg>
+      Upload &amp; Batch from Blender
+    `;
+  }
 
   fileInput.addEventListener('change', async (e) => {
     const files = Array.from(e.target.files);
@@ -914,45 +981,66 @@ function initBatchBlenderButton() {
       batchCameras = payload.cameras || [];
       if (!batchCameras.length) { alert('No cameras found in JSON'); return; }
 
-      // Upload PNGs to server
-      if (pngFiles.length > 0) {
-        btn.disabled = true;
-        btn.textContent = `Uploading ${pngFiles.length} passes…`;
+      // Determine which PNGs are needed vs already selected
+      const requiredPngs = getRequiredPngs(batchCameras);
+      const selectedPngNames = new Set(pngFiles.map(f => f.name));
+      const missingPngs = [...requiredPngs].filter(n => !selectedPngNames.has(n));
 
-        const uploadForm = new FormData();
-        uploadForm.append('workspace', state.workspace.name);
-        for (const png of pngFiles) {
-          uploadForm.append('files', png);
-        }
-
-        const uploadRes = await fetch('/api/batch/blender/upload', {
-          method: 'POST', body: uploadForm
-        });
-
-        if (!uploadRes.ok) {
-          const err = await uploadRes.json();
-          throw new Error(err.detail || 'Upload failed');
-        }
-
-        const uploadData = await uploadRes.json();
-        console.log(`Uploaded ${uploadData.count} blender passes`);
-        btn.disabled = false;
-        btn.innerHTML = `
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <line x1="8" y1="6" x2="21" y2="6" />
-            <line x1="8" y1="12" x2="21" y2="12" />
-            <line x1="8" y1="18" x2="21" y2="18" />
-            <line x1="3" y1="6" x2="3.01" y2="6" />
-            <line x1="3" y1="12" x2="3.01" y2="12" />
-            <line x1="3" y1="18" x2="3.01" y2="18" />
-          </svg>
-          Upload &amp; Batch from Blender
-        `;
+      if (pngFiles.length > 0 && missingPngs.length === 0) {
+        // All needed PNGs were co-selected — upload directly
+        await uploadPngs(pngFiles);
+        resetBtn();
+        renderCameraCards(batchCameras);
+        return;
       }
 
+      // PNGs missing — prompt user with a second file picker
+      const missingMsg = missingPngs.length === requiredPngs.size
+        ? `Select all ${requiredPngs.size} PNG pass files referenced in the JSON.`
+        : `Missing ${missingPngs.length} PNG(s): ${missingPngs.join(', ')}`;
+
+      alert(`📂 ${missingMsg}\n\nA file picker will open — select the PNG files from your Blender export folder.`);
+
+      // Open second picker for PNGs
+      const pngPromise = new Promise((resolve) => {
+        const handler = async (ev) => {
+          pngPickerInput.removeEventListener('change', handler);
+          const picked = Array.from(ev.target.files).filter(f => f.name.endsWith('.png'));
+          ev.target.value = '';
+          resolve(picked);
+        };
+        pngPickerInput.addEventListener('change', handler);
+        pngPickerInput.click();
+      });
+
+      const pickedPngs = await pngPromise;
+
+      // Merge: originally co-selected + newly picked
+      const allPngs = [...pngFiles, ...pickedPngs];
+      // Dedupe by filename (keep last)
+      const pngMap = new Map();
+      for (const f of allPngs) pngMap.set(f.name, f);
+      const dedupedPngs = [...pngMap.values()];
+
+      if (dedupedPngs.length === 0) {
+        alert('No PNG files selected. Camera cards will render but passes may fail.');
+        resetBtn();
+        renderCameraCards(batchCameras);
+        return;
+      }
+
+      // Check for still-missing files (warn but don't block)
+      const finalNames = new Set(dedupedPngs.map(f => f.name));
+      const stillMissing = [...requiredPngs].filter(n => !finalNames.has(n));
+      if (stillMissing.length > 0) {
+        console.warn(`Still missing passes: ${stillMissing.join(', ')}`);
+      }
+
+      await uploadPngs(dedupedPngs);
+      resetBtn();
       renderCameraCards(batchCameras);
     } catch (err) {
-      btn.disabled = false;
+      resetBtn();
       alert(`Failed: ${err.message}`);
     }
   });
