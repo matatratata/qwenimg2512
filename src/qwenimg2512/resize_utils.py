@@ -26,6 +26,8 @@ def resize_with_fit_mode(
     contain
         Scale so the image fully **fits** within the target box, then pad the
         remaining area with black.  No cropping, but letterbox bars appear.
+    contain_white
+        Same as *contain* but pads with white instead of black.
     stretch
         Resize to the exact target dimensions, ignoring aspect ratio.
     center
@@ -38,6 +40,8 @@ def resize_with_fit_mode(
         return _cover(image, src_w, src_h, width, height)
     elif mode == "contain":
         return _contain(image, src_w, src_h, width, height)
+    elif mode == "contain_white":
+        return _contain(image, src_w, src_h, width, height, pad_color=(255, 255, 255))
     elif mode == "stretch":
         return image.resize((width, height), Image.LANCZOS)
     elif mode == "center":
@@ -63,12 +67,13 @@ def _cover(
 
 def _contain(
     image: Image.Image, src_w: int, src_h: int, dst_w: int, dst_h: int,
+    pad_color: tuple[int, int, int] = (0, 0, 0),
 ) -> Image.Image:
     scale = min(dst_w / src_w, dst_h / src_h)
     new_w = round(src_w * scale)
     new_h = round(src_h * scale)
     image = image.resize((new_w, new_h), Image.LANCZOS)
-    canvas = Image.new("RGB", (dst_w, dst_h), (0, 0, 0))
+    canvas = Image.new("RGB", (dst_w, dst_h), pad_color)
     paste_x = (dst_w - new_w) // 2
     paste_y = (dst_h - new_h) // 2
     canvas.paste(image, (paste_x, paste_y))

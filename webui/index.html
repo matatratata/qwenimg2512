@@ -82,6 +82,11 @@
             <span class="stage-num">05</span>
             <span>BG</span>
           </button>
+          <div class="sidebar-divider"></div>
+          <button class="stage-tab" data-stage="rotate" title="Rotate camera angle (utility)">
+            <span class="stage-num">R</span>
+            <span>ANG</span>
+          </button>
         </nav>
 
         <!-- Left Panel -->
@@ -793,6 +798,189 @@
                 </svg>
               </button>
               <div class="history-list" id="historyList5"></div>
+            </div>
+          </div>
+
+          <!-- ===== Utility: Angle / Rotate ===== -->
+          <div class="stage-content" data-stage="rotate">
+            <div class="panel-scroll">
+              <h3 class="panel-title">Utility — Angle Rotate</h3>
+
+              <!-- Prompt Builder -->
+              <div class="form-group">
+                <label style="font-size:0.75rem; text-transform:uppercase; letter-spacing:0.05em; opacity:0.6; margin-bottom:6px;">Prompt Builder</label>
+                <div class="angle-builder">
+                  <div class="angle-builder-row">
+                    <label>Azimuth</label>
+                    <select class="input-field" id="ang-azimuth">
+                      <option value="front view" selected>Front (0°)</option>
+                      <option value="front-right quarter view">Front-Right (45°)</option>
+                      <option value="right side view">Right (90°)</option>
+                      <option value="back-right quarter view">Back-Right (135°)</option>
+                      <option value="back view">Back (180°)</option>
+                      <option value="back-left quarter view">Back-Left (225°)</option>
+                      <option value="left side view">Left (270°)</option>
+                      <option value="front-left quarter view">Front-Left (315°)</option>
+                    </select>
+                  </div>
+                  <div class="angle-builder-row">
+                    <label>Elevation</label>
+                    <select class="input-field" id="ang-elevation">
+                      <option value="low-angle shot">Low Angle (−30°)</option>
+                      <option value="eye-level shot" selected>Eye Level (0°)</option>
+                      <option value="elevated shot">Elevated (30°)</option>
+                      <option value="high-angle shot">High Angle (60°)</option>
+                    </select>
+                  </div>
+                  <div class="angle-builder-row">
+                    <label>Distance</label>
+                    <select class="input-field" id="ang-distance">
+                      <option value="close-up">Close-up</option>
+                      <option value="medium shot" selected>Medium Shot</option>
+                      <option value="wide shot">Wide Shot</option>
+                    </select>
+                  </div>
+                </div>
+              </div>
+
+              <div class="form-group">
+                <label for="ang-prompt">Prompt <span style="opacity:0.5; font-size:11px; font-weight:normal;">(auto-generated from builder)</span></label>
+                <textarea class="input-field" id="ang-prompt" rows="3"><sks> front view eye-level shot medium shot</textarea>
+              </div>
+
+              <!-- Ref Image -->
+              <div class="form-group">
+                <label>Reference Image</label>
+                <div class="upload-zone upload-zone-sm" id="angUpload">
+                  <input type="file" id="angFileInput" accept="image/*" hidden />
+                  <div class="upload-placeholder">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"
+                      opacity="0.4">
+                      <rect x="3" y="3" width="18" height="18" rx="2" />
+                      <circle cx="8.5" cy="8.5" r="1.5" />
+                      <polyline points="21 15 16 10 5 21" />
+                    </svg>
+                    <p>Drop image or <span class="accent-link">browse</span></p>
+                  </div>
+                  <img id="angPreview" class="upload-preview" alt="Reference" />
+                </div>
+                <div style="display:flex; gap:6px; margin-top:8px;">
+                  <button class="btn-use-result" id="btnUseStage3ForAng" style="flex:1">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <path d="M5 12h14" />
+                      <path d="M12 5l7 7-7 7" />
+                    </svg>
+                    Use Stage 03
+                  </button>
+                  <button class="btn-use-result" id="btnUseStage4ForAng" style="flex:1">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <path d="M5 12h14" />
+                      <path d="M12 5l7 7-7 7" />
+                    </svg>
+                    Use Stage 04
+                  </button>
+                </div>
+              </div>
+
+              <!-- Bundled ref images -->
+              <div id="angBundledRefList"
+                style="display:none; gap:6px; flex-wrap:wrap; padding-bottom:4px; margin-top:4px">
+              </div>
+
+              <div class="form-group">
+                <label>LoRA 1 (Lightning)</label>
+                <input class="input-field" type="text" id="ang-lora-path" value=""
+                  placeholder="Path to Lightning LoRA .safetensors" />
+              </div>
+
+              <div class="form-group">
+                <label>LoRA 1 Scale <span class="slider-val" id="angLoraScaleVal">0.60</span></label>
+                <div class="slider-row">
+                  <input type="range" id="angLoraScale" min="0" max="1" step="0.05" value="0.60" />
+                </div>
+              </div>
+
+              <div class="form-group">
+                <label>LoRA 2 (Angles)</label>
+                <input class="input-field" type="text" id="ang-lora-path-2" value=""
+                  placeholder="Path to Angles LoRA .safetensors" />
+              </div>
+
+              <div class="form-group">
+                <label>LoRA 2 Scale <span class="slider-val" id="angLoraScale2Val">1.00</span></label>
+                <div class="slider-row">
+                  <input type="range" id="angLoraScale2" min="0" max="1" step="0.05" value="1.00" />
+                </div>
+              </div>
+
+              <div class="form-group">
+                <label>Steps <span class="slider-val" id="angStepsVal">21</span></label>
+                <div class="slider-row">
+                  <input type="range" id="angSteps" min="4" max="100" step="1" value="21" />
+                </div>
+              </div>
+
+              <div class="form-group">
+                <label for="ang-aspect">Aspect Ratio</label>
+                <select class="input-field" id="ang-aspect">
+                  <option value="9:16 (960x1664)" selected>9:16 (960×1664)</option>
+                  <option value="16:9 (1664x960)">16:9 (1664×960)</option>
+                  <option value="1:1 Square (1024x1024)">1:1 (1024×1024)</option>
+                  <option value="1:1 (1344x1344)">1:1 (1344×1344)</option>
+                  <option value="4:3 (1472x1088)">4:3 (1472×1088)</option>
+                  <option value="3:4 (1088x1472)">3:4 (1088×1472)</option>
+                  <option value="9:16 Half (480x832)">9:16 Half (480×832)</option>
+                  <option value="1:1 Half (640x640)">1:1 Half (640×640)</option>
+                </select>
+              </div>
+
+              <div class="form-group">
+                <label for="ang-sampler">Sampler</label>
+                <select class="input-field" id="ang-sampler">
+                  <option value="res_2s" selected>Res 2S</option>
+                  <option value="euler">Euler</option>
+                  <option value="euler_a">Euler Ancestral</option>
+                  <option value="dpmpp_2m">DPM++ 2M</option>
+                </select>
+              </div>
+
+              <div class="form-group">
+                <label for="ang-schedule">Schedule</label>
+                <select class="input-field" id="ang-schedule">
+                  <option value="beta57" selected>Beta57</option>
+                  <option value="default">Default</option>
+                </select>
+              </div>
+
+              <div class="form-group">
+                <label>Seed</label>
+                <div class="seed-row">
+                  <input type="number" class="input-field" id="ang-seed" value="11456" min="-1" max="4294967295" />
+                  <label class="checkbox-label">
+                    <input type="checkbox" id="ang-randomize" />
+                    Random
+                  </label>
+                </div>
+              </div>
+
+              <button class="btn-primary" id="btnRotate">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M23 4v6h-6" />
+                  <path d="M20.49 15a9 9 0 11-2.12-9.36L23 10" />
+                </svg>
+                Rotate
+              </button>
+            </div>
+
+            <!-- History -->
+            <div class="history-panel" id="historyPanelRotate">
+              <button class="history-toggle" id="historyToggleRotate">
+                <span>History</span>
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <polyline points="6 9 12 15 18 9" />
+                </svg>
+              </button>
+              <div class="history-list" id="historyListRotate"></div>
             </div>
           </div>
         </aside>

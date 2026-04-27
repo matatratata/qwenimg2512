@@ -247,7 +247,20 @@ snapshot_download('Qwen/Qwen-Image-Edit-2511', local_dir='${BASE_2511}',
         echo "  ✅ Lightning LoRA downloaded."
     fi
 
-    # 5g. ControlNet Union (Stage 02)
+    # 5g. Multiple Angles LoRA (Fal — camera rotation)
+    ANGLES_LORA_DIR="${LORA_DIR}/2511"
+    ANGLES_LORA="${ANGLES_LORA_DIR}/qwen-image-edit-2511-multiple-angles-lora.safetensors"
+    if [ -f "$ANGLES_LORA" ]; then
+        echo "  Multiple Angles LoRA already downloaded."
+    else
+        echo "  Downloading Multiple Angles LoRA (Fal)..."
+        mkdir -p "$ANGLES_LORA_DIR"
+        curl -L -o "$ANGLES_LORA" \
+            "https://huggingface.co/fal/Qwen-Image-Edit-2511-Multiple-Angles-LoRA/resolve/main/qwen-image-edit-2511-multiple-angles-lora.safetensors"
+        echo "  ✅ Multiple Angles LoRA downloaded."
+    fi
+
+    # 5h. ControlNet Union (Stage 02)
     CN_DIR="${MODEL_DIR}/Qwen-Image-2512-Fun-Controlnet-Union"
     CN_FILE="${CN_DIR}/Qwen-Image-2512-Fun-Controlnet-Union-2602.safetensors"
     if [ -f "$CN_FILE" ]; then

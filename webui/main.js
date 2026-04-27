@@ -14,9 +14,10 @@ const state = {
   s5SourceImage: null,      // File — Stage 05 source image
   s5OriginalImageData: null,// ImageData — original pixels for live reprocessing
   s5ProcessedCanvas: null,  // Canvas — latest processed result
+  angRefImage: null,        // File — Angle/Rotate ref image
   selectedGalleryImage: null,
   currentTaskId: null,      // Tracks the task ID of the currently generating stage
-  historyOpen: { 1: false, 2: false, 3: false, 4: false, 5: false },
+  historyOpen: { 1: false, 2: false, 3: false, 4: false, 5: false, rotate: false },
 };
 
 // -------- DOM --------
@@ -47,6 +48,7 @@ function initAll() {
     ['initWorkspaceDialog', initWorkspaceDialog],
     ['initLightbox', initLightbox],
     ['initStage5', initStage5],
+    ['initAngleStage', initAngleStage],
   ];
   for (const [name, fn] of inits) {
     try {
@@ -188,12 +190,25 @@ async function loadSettings() {
       
       const elS4Lora = $('#s4-lora-path');
       if (elS4Lora) elS4Lora.value = settings.lightning_lora_path;
+
+      // Auto-fill Angle stage Lightning LoRA
+      const elAngLora = $('#ang-lora-path');
+      if (elAngLora) elAngLora.value = settings.lightning_lora_path;
     }
 
     if (settings.restoration_lora_path) {
-      const elS4Lora2 = $('#s4-lora-path-2'); // Note: index.html has s4-lora-path and we assume s4-lora-path-2? Wait... let me check exactly what the ID is. 
-      // ACTUALLY I'll just check if it exists before assigning
+      const elS4Lora2 = $('#s4-lora-path-2');
       if (elS4Lora2) elS4Lora2.value = settings.restoration_lora_path;
+    }
+
+    // Auto-fill Angle stage Angles LoRA from loras_dir
+    if (settings.loras_dir) {
+      let dir = settings.loras_dir.trim();
+      if (dir.endsWith('/')) dir = dir.slice(0, -1);
+      const elAngLora2 = $('#ang-lora-path-2');
+      if (elAngLora2 && !elAngLora2.value) {
+        elAngLora2.value = `${dir}/2511/qwen-image-edit-2511-multiple-angles-lora.safetensors`;
+      }
     }
   } catch {
     // ignore
@@ -313,7 +328,8 @@ function initWorkspaceDialog() {
 function initStageTabs() {
   $$('.stage-tab').forEach((tab) => {
     tab.addEventListener('click', () => {
-      const stage = parseInt(tab.dataset.stage);
+      const raw = tab.dataset.stage;
+      const stage = isNaN(raw) ? raw : parseInt(raw);
       setActiveStage(stage);
     });
   });
@@ -324,22 +340,22 @@ function setActiveStage(stage) {
 
   // Update sidebar tabs
   $$('.stage-tab').forEach((t) => {
-    t.classList.toggle('active', parseInt(t.dataset.stage) === stage);
+    const tabStage = isNaN(t.dataset.stage) ? t.dataset.stage : parseInt(t.dataset.stage);
+    t.classList.toggle('active', tabStage === stage);
   });
 
   // Update content panels
   $$('.stage-content').forEach((c) => {
-    c.classList.toggle('active', parseInt(c.dataset.stage) === stage);
+    const panelStage = isNaN(c.dataset.stage) ? c.dataset.stage : parseInt(c.dataset.stage);
+    c.classList.toggle('active', panelStage === stage);
   });
 
   // Update gallery title
-  const titles = { 1: 'Stage 01 Results', 2: 'Stage 02 Results', 3: 'Stage 03 Results', 4: 'Stage 04 Results', 5: 'Stage 05 Results' };
+  const titles = { 1: 'Stage 01 Results', 2: 'Stage 02 Results', 3: 'Stage 03 Results', 4: 'Stage 04 Results', 5: 'Stage 05 Results', rotate: 'Angle Results' };
   $('#galleryTitle').textContent = titles[stage] || `Stage ${String(stage).padStart(2, '0')} Results`;
 
   // Toggle checkerboard class for stage 5 gallery
   $('#galleryGrid').classList.toggle('stage-5-active', stage === 5);
-
-
 
   // Load gallery for this stage
   if (state.workspace) {
@@ -366,6 +382,9 @@ function initSliders() {
     ['s4Steps', 's4StepsVal'],
     ['s5Thresh', 's5ThreshVal'],
     ['s5Feather', 's5FeatherVal'],
+    ['angLoraScale', 'angLoraScaleVal'],
+    ['angLoraScale2', 'angLoraScale2Val'],
+    ['angSteps', 'angStepsVal'],
   ];
 
   bindings.forEach(([sliderId, valId]) => {
@@ -416,6 +435,10 @@ function initUploads() {
   setupUploadZone('s5Upload', 's5FileInput', 's5Preview', (file) => {
     state.s5SourceImage = file;
     _s5LoadSourceImage(file);
+  });
+
+  setupUploadZone('angUpload', 'angFileInput', 'angPreview', (file) => {
+    state.angRefImage = file;
   });
 }
 
@@ -1497,7 +1520,7 @@ function setGenerating(isGenerating) {
   const overlay = $('#progressOverlay');
   overlay.style.display = isGenerating ? 'flex' : 'none';
 
-  const btns = ['#btnModel', '#btnGenerate', '#btnEdit', '#btnDelight'];
+  const btns = ['#btnModel', '#btnGenerate', '#btnEdit', '#btnDelight', '#btnRotate'];
   btns.forEach((sel) => {
     const btn = $(sel);
     if (btn) {
@@ -1610,13 +1633,14 @@ function stopProgressPolling() {
 // HISTORY
 // ============================================================
 function initHistory() {
-  ['1', '2', '3', '4', '5'].forEach((stage) => {
+  ['1', '2', '3', '4', '5', 'Rotate'].forEach((stage) => {
     const toggle = $(`#historyToggle${stage}`);
     const list = $(`#historyList${stage}`);
     if (toggle && list) {
       toggle.addEventListener('click', () => {
+        const key = stage === 'Rotate' ? 'rotate' : stage;
         const open = list.classList.toggle('open');
-        state.historyOpen[stage] = open;
+        state.historyOpen[key] = open;
       });
     }
   });
@@ -1624,7 +1648,8 @@ function initHistory() {
 
 async function loadHistory(stage) {
   if (!state.workspace) return;
-  const list = $(`#historyList${stage}`);
+  const idSuffix = stage === 'rotate' ? 'Rotate' : stage;
+  const list = $(`#historyList${idSuffix}`);
   if (!list) return;
 
   try {
@@ -1793,6 +1818,29 @@ function loadHistoryEntry(entry, stage) {
       $('#s4-seed').value = entry.seed;
       $('#s4-randomize').checked = false;
     }
+  } else if (stage === 'rotate') {
+    if (entry.prompt) $('#ang-prompt').value = entry.prompt;
+    if (entry.num_inference_steps != null) {
+      $('#angSteps').value = entry.num_inference_steps;
+      $('#angStepsVal').textContent = entry.num_inference_steps;
+    }
+    if (entry.lora_scale != null) {
+      $('#angLoraScale').value = entry.lora_scale;
+      $('#angLoraScaleVal').textContent = entry.lora_scale;
+    }
+    if (entry.lora_path) $('#ang-lora-path').value = entry.lora_path;
+    if (entry.lora_scale_2 != null) {
+      $('#angLoraScale2').value = entry.lora_scale_2;
+      $('#angLoraScale2Val').textContent = entry.lora_scale_2;
+    }
+    if (entry.lora_path_2) $('#ang-lora-path-2').value = entry.lora_path_2;
+    if (entry.aspect_ratio) $('#ang-aspect').value = entry.aspect_ratio;
+    if (entry.sampler_name) $('#ang-sampler').value = entry.sampler_name;
+    if (entry.schedule_name) $('#ang-schedule').value = entry.schedule_name;
+    if (entry.seed != null) {
+      $('#ang-seed').value = entry.seed;
+      $('#ang-randomize').checked = false;
+    }
   }
 }
 
@@ -1859,6 +1907,7 @@ function openLightbox(imageUrl, filename, stage) {
     3: state.refImage1,
     4: state.s4RefImage,
     5: state.s5SourceImage,
+    'rotate': state.angRefImage,
   };
   const refImage = refImageForStage[stage];
   if (refImage) {
@@ -2199,3 +2248,167 @@ function _s5ShowPreview(canvas, threshold, feather) {
   const displayCtx = displayCanvas.getContext('2d');
   displayCtx.drawImage(canvas, 0, 0);
 }
+
+// ============================================================
+// ANGLE / ROTATE (Utility Stage)
+// ============================================================
+function initAngleStage() {
+  // ── Prompt Builder ───────────────────────────────────────
+  const azimuth = $('#ang-azimuth');
+  const elevation = $('#ang-elevation');
+  const distance = $('#ang-distance');
+  const promptField = $('#ang-prompt');
+
+  function buildAnglePrompt() {
+    promptField.value = `<sks> ${azimuth.value} ${elevation.value} ${distance.value}`;
+  }
+
+  azimuth.addEventListener('change', buildAnglePrompt);
+  elevation.addEventListener('change', buildAnglePrompt);
+  distance.addEventListener('change', buildAnglePrompt);
+
+  // ── Use Stage 03 / 04 buttons ────────────────────────────
+  async function loadStageImageForAngle(sourceStage) {
+    if (!state.workspace) return;
+    try {
+      const res = await fetch(`/api/workspaces/${encodeURIComponent(state.workspace.name)}/stages/${sourceStage}/images`);
+      const data = await res.json();
+      const images = data.images || [];
+      if (images.length === 0) {
+        alert(`No Stage ${String(sourceStage).padStart(2, '0')} images yet.`);
+        return;
+      }
+      const latest = images[images.length - 1];
+      const imgUrl = `/api/workspaces/${encodeURIComponent(state.workspace.name)}/stages/${sourceStage}/images/${encodeURIComponent(latest)}`;
+      const imgRes = await fetch(imgUrl);
+      const blob = await imgRes.blob();
+      const file = new File([blob], latest, { type: blob.type });
+      state.angRefImage = file;
+      const preview = $('#angPreview');
+      preview.src = URL.createObjectURL(blob);
+      preview.style.display = 'block';
+      $('#angUpload').classList.add('has-image');
+    } catch (err) {
+      alert(`Error loading stage ${sourceStage} images: ${err.message}`);
+    }
+  }
+
+  $('#btnUseStage3ForAng').addEventListener('click', () => loadStageImageForAngle(3));
+  $('#btnUseStage4ForAng').addEventListener('click', () => loadStageImageForAngle(4));
+
+  // ── Bundled ref images ───────────────────────────────────
+  (async () => {
+    try {
+      const res = await fetch('/api/ref_images');
+      const data = await res.json();
+      const images = data.images || [];
+      const list = $('#angBundledRefList');
+      if (images.length === 0) { list.style.display = 'none'; return; }
+
+      list.style.display = 'flex';
+      list.innerHTML = '';
+      images.forEach(filename => {
+        const imgUrl = `/api/ref_images/${encodeURIComponent(filename)}`;
+        const img = document.createElement('img');
+        img.src = imgUrl;
+        img.alt = filename;
+        Object.assign(img.style, {
+          height: '52px', width: '52px', objectFit: 'cover',
+          borderRadius: 'var(--radius-sm)', cursor: 'pointer',
+          border: '2px solid transparent', transition: 'border-color 0.2s, transform 0.15s',
+        });
+        img.title = filename.replace(/\.[^.]+$/, '').replace(/_/g, ' ');
+        img.addEventListener('mouseenter', () => { img.style.transform = 'scale(1.08)'; });
+        img.addEventListener('mouseleave', () => { img.style.transform = ''; });
+        img.addEventListener('click', async () => {
+          try {
+            const response = await fetch(imgUrl);
+            const blob = await response.blob();
+            const file = new File([blob], filename, { type: blob.type });
+            state.angRefImage = file;
+            const preview = $('#angPreview');
+            preview.src = URL.createObjectURL(blob);
+            preview.style.display = 'block';
+            $('#angUpload').classList.add('has-image');
+            list.querySelectorAll('img').forEach(el => el.style.borderColor = 'transparent');
+            img.style.borderColor = 'var(--accent)';
+          } catch (err) {
+            console.error('Error loading bundled reference:', err);
+          }
+        });
+        list.appendChild(img);
+      });
+    } catch (err) {
+      console.error('Failed to load bundled ref images for angle stage:', err);
+    }
+  })();
+
+  // ── Generate button ──────────────────────────────────────
+  $('#btnRotate').addEventListener('click', () => {
+    if (state.generating) return;
+    rotateGenerate();
+  });
+}
+
+async function rotateGenerate() {
+  if (!state.workspace) return;
+  if (!state.angRefImage) {
+    alert('Please select a reference image first.');
+    return;
+  }
+
+  state.generating = true;
+  setGenerating(true);
+  updateProgress(0, 'Uploading…', '', '');
+
+  const formData = new FormData();
+  formData.append('workspace', state.workspace.name);
+  formData.append('prompt', $('#ang-prompt').value);
+  formData.append('aspect_ratio', $('#ang-aspect').value);
+  formData.append('sampler_name', $('#ang-sampler').value);
+  formData.append('schedule_name', $('#ang-schedule').value);
+  formData.append('num_inference_steps', $('#angSteps').value);
+  formData.append('lora_path', $('#ang-lora-path').value);
+  formData.append('lora_scale', $('#angLoraScale').value);
+  formData.append('lora_path_2', $('#ang-lora-path-2').value);
+  formData.append('lora_scale_2', $('#angLoraScale2').value);
+
+  const seed = $('#ang-randomize').checked ? -1 : parseInt($('#ang-seed').value);
+  formData.append('seed', String(seed));
+
+  formData.append('ref_image_1', state.angRefImage);
+
+  try {
+    updateProgress(2, 'Sending to server…', '', '');
+
+    const resPromise = fetch('/api/rotate', { method: 'POST', body: formData });
+    const pollPromise = startProgressPolling();
+
+    const res = await resPromise;
+    stopProgressPolling();
+
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.detail || 'Rotate failed');
+    }
+
+    const data = await res.json();
+    updateProgress(100, 'Done!', '', '');
+
+    await loadStageGallery('rotate');
+    await loadHistory('rotate');
+
+    if (data.filename) {
+      selectGalleryImage(data.filename, 'rotate');
+    }
+    if (data.seed) {
+      $('#ang-seed').value = data.seed;
+    }
+  } catch (err) {
+    alert(`Error: ${err.message}`);
+  } finally {
+    state.generating = false;
+    setGenerating(false);
+  }
+}
+

@@ -206,9 +206,12 @@ def get_workspace_dir(name: str) -> Path:
     return _get_workspace_root() / safe_name
 
 
-def get_stage_dir(workspace_name: str, stage: int) -> Path:
+def get_stage_dir(workspace_name: str, stage) -> Path:
     ws = get_workspace_dir(workspace_name)
-    d = ws / f"stage_{stage:02d}"
+    if str(stage) == 'rotate':
+        d = ws / "stage_rotate"
+    else:
+        d = ws / f"stage_{int(stage):02d}"
     d.mkdir(parents=True, exist_ok=True)
     return d
 
@@ -220,17 +223,18 @@ def get_history_dir(workspace_name: str) -> Path:
     return d
 
 
-def save_history_entry(workspace_name: str, stage: int, params: dict, filename: str):
+def save_history_entry(workspace_name: str, stage, params: dict, filename: str):
     """Save a generation history entry as JSON."""
     hist_dir = get_history_dir(workspace_name)
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    stage_label = str(stage)  # supports 'rotate' or int
     entry = {
-        "stage": stage,
+        "stage": stage_label,
         "timestamp": datetime.now().isoformat(),
         "thumbnail": filename,
         **params,
     }
-    hist_file = hist_dir / f"stage{stage}_{ts}_{uuid.uuid4().hex[:6]}.json"
+    hist_file = hist_dir / f"stage{stage_label}_{ts}_{uuid.uuid4().hex[:6]}.json"
     hist_file.write_text(json.dumps(entry, indent=2))
     return entry
 
@@ -438,6 +442,7 @@ async def create_workspace(body: dict):
     # Pre-create stage directories
     for stage in [1, 2, 3, 4, 5]:
         (ws_dir / f"stage_{stage:02d}").mkdir()
+    (ws_dir / "stage_rotate").mkdir()
 
     return {"name": name, "path": str(ws_dir), "image_count": 0, "thumbnail": False}
 
@@ -470,7 +475,7 @@ async def workspace_thumbnail(name: str):
 # API: Stage Images
 # ---------------------------------------------------------------------------
 @app.get("/api/workspaces/{name}/stages/{stage}/images")
-async def list_stage_images(name: str, stage: int):
+async def list_stage_images(name: str, stage: str):
     """List images in a stage directory (excludes dot-files like .control_*, .ref_*)."""
     stage_dir = get_stage_dir(name, stage)
     images = sorted(
@@ -483,7 +488,7 @@ async def list_stage_images(name: str, stage: int):
 
 
 @app.get("/api/workspaces/{name}/stages/{stage}/images/{filename}")
-async def get_stage_image(name: str, stage: int, filename: str):
+async def get_stage_image(name: str, stage: str, filename: str):
     """Serve a specific image file."""
     stage_dir = get_stage_dir(name, stage)
     filepath = stage_dir / filename
@@ -553,7 +558,7 @@ async def get_ref_image(filename: str):
 # API: History
 # ---------------------------------------------------------------------------
 @app.get("/api/workspaces/{name}/history")
-async def get_history(name: str, stage: Optional[int] = None):
+async def get_history(name: str, stage: Optional[str] = None):
     """Get generation history for a workspace."""
     hist_dir = get_history_dir(name)
     entries = []
@@ -562,7 +567,7 @@ async def get_history(name: str, stage: Optional[int] = None):
         if f.suffix == '.json':
             try:
                 entry = json.loads(f.read_text())
-                if stage is not None and entry.get("stage") != stage:
+                if stage is not None and str(entry.get("stage")) != str(stage):
                     continue
                 entries.append(entry)
             except Exception:
@@ -1292,6 +1297,161 @@ async def delight(
     filename = Path(output_path).name
     save_history_entry(workspace, 4, params, filename)
     return {"task_id": task_id, "filename": filename, "path": output_path, "seed": actual_seed}
+
+
+# ---------------------------------------------------------------------------
+# API: Rotate / Angle (Utility) — Edit 2511 + Lightning + Multiple Angles LoRA
+# ---------------------------------------------------------------------------
+@app.post("/api/rotate")
+async def rotate(
+    workspace: str = Form(...),
+    prompt: str = Form("<sks> front view eye-level shot medium shot"),
+    aspect_ratio: str = Form("9:16 (960x1664)"),
+    sampler_name: str = Form("res_2s"),
+    schedule_name: str = Form("beta57"),
+    num_inference_steps: int = Form(21),
+    seed: int = Form(-1),
+    lora_path: str = Form(""),
+    lora_scale: float = Form(0.6),
+    lora_path_2: str = Form(""),
+    lora_scale_2: float = Form(1.0),
+    ref_image_1: UploadFile = File(...),
+):
+    """Run Angle/Rotate utility: Edit 2511 + Lightning LoRA + Multiple Angles LoRA.
+
+    Uses contain_white fit mode for the reference image (pads with white instead of cropping).
+    """
+    task_id = str(uuid.uuid4())
+    stage_dir = get_stage_dir(workspace, "rotate")
+
+    # Save ref image
+    ref_path = stage_dir / f".ref_{uuid.uuid4().hex[:8]}.png"
+    data = await ref_image_1.read()
+    ref_path.write_bytes(data)
+
+    actual_seed = seed if seed >= 0 else random.randint(0, 2**32 - 1)
+
+    params = {
+        "prompt": prompt,
+        "aspect_ratio": aspect_ratio,
+        "sampler_name": sampler_name,
+        "schedule_name": schedule_name,
+        "num_inference_steps": num_inference_steps,
+        "seed": actual_seed,
+        "lora_path": lora_path,
+        "lora_scale": lora_scale,
+        "lora_path_2": lora_path_2,
+        "lora_scale_2": lora_scale_2,
+    }
+
+    async with gpu_lock:
+        _init_progress(task_id)
+        try:
+            output_path = await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: _run_rotate(
+                    task_id=task_id,
+                    output_dir=str(stage_dir),
+                    ref_image_path=str(ref_path),
+                    **params,
+                ),
+            )
+        except Exception as e:
+            progress_store[task_id] = {"done": True, "error": str(e)}
+            logger.exception("Rotate failed")
+            raise HTTPException(500, str(e))
+
+    progress_store[task_id] = {"done": True, "stage": "Complete!", "step": num_inference_steps, "total": num_inference_steps}
+    filename = Path(output_path).name
+    save_history_entry(workspace, "rotate", params, filename)
+    return {"task_id": task_id, "filename": filename, "path": output_path, "seed": actual_seed}
+
+
+def _run_rotate(
+    task_id: str,
+    output_dir: str,
+    ref_image_path: str,
+    prompt: str,
+    aspect_ratio: str,
+    sampler_name: str,
+    schedule_name: str,
+    num_inference_steps: int,
+    seed: int,
+    lora_path: str = "",
+    lora_scale: float = 0.6,
+    lora_path_2: str = "",
+    lora_scale_2: float = 1.0,
+) -> str:
+    """Synchronous Rotate generation — Edit 2511 with contain_white fit + dual LoRA."""
+    from qwenimg2512.config import EditSettings, Config
+
+    config = Config.load()
+
+    settings = EditSettings(
+        prompt=prompt,
+        negative_prompt="",
+        aspect_ratio=aspect_ratio,
+        num_inference_steps=num_inference_steps,
+        true_cfg_scale=1.0,
+        guidance_scale=1.0,
+        seed=seed,
+        output_dir=output_dir,
+        sampler_name=sampler_name,
+        schedule_name=schedule_name,
+        ref_image_1=ref_image_path,
+        ref_image_2="",
+        ref_image_3="",
+        ref_fit_mode_1="contain_white",
+        ref_fit_mode_2="cover",
+        ref_fit_mode_3="stretch",
+        lora_path=lora_path,
+        lora_scale_start=lora_scale,
+        lora_scale_end=lora_scale,
+        lora_step_start=0,
+        lora_step_end=-1,
+        lora_path_2=lora_path_2,
+        lora_scale_start_2=lora_scale_2,
+        lora_scale_end_2=lora_scale_2,
+        lora_step_start_2=0,
+        lora_step_end_2=-1,
+        ref_strength_1=1.0,
+        ref_strength_2=1.0,
+        ref_strength_3=0.15,
+        ffn_chunk_size=2048,
+        blocks_to_swap=0,
+        attn_chunk_size=4096,
+    )
+
+    logger.info(
+        f"[Rotate] settings: ref1={settings.ref_image_1}, fit={settings.ref_fit_mode_1}, "
+        f"lora1={settings.lora_path}, lora2={settings.lora_path_2}"
+    )
+
+    from qwenimg2512.edit_worker import EditWorker
+
+    _pre_generation_gc()
+    worker = EditWorker(settings, config.model_paths)
+    worker._is_cancelled = False
+    _connect_worker_progress(worker, task_id)
+
+    try:
+        worker._run_generation()
+    finally:
+        _cleanup_worker(worker, "rotate")
+
+    # Find the output file
+    output_path = Path(output_dir)
+    images = sorted(
+        [f for f in output_path.iterdir()
+         if f.suffix == '.png' and not f.name.startswith('.')],
+        key=lambda f: f.stat().st_mtime,
+        reverse=True,
+    )
+
+    if not images:
+        raise RuntimeError("No output image produced")
+
+    return str(images[0])
 
 
 # ---------------------------------------------------------------------------

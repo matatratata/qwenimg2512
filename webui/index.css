@@ -366,6 +366,44 @@ html, body {
   border-radius: 0 3px 3px 0;
 }
 
+/* Sidebar divider (between pipeline stages and utility tabs) */
+.sidebar-divider {
+  width: 28px;
+  height: 1px;
+  background: var(--border);
+  margin: 6px 0;
+}
+
+/* ── Angle Prompt Builder ──────────────────────────────── */
+.angle-builder {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+.angle-builder-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.angle-builder-row > label {
+  min-width: 66px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--cloud-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  margin-bottom: 0;
+}
+.angle-builder-row .input-field {
+  flex: 1;
+  padding: 5px 8px;
+  font-size: 12px;
+}
+
 /* ── Panel ──────────────────────────────────────────────── */
 .panel {
   background: var(--bg-panel);

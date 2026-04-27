@@ -83,12 +83,14 @@ class ReferenceImageWidget(QGroupBox):
         self.fit_combo = QComboBox()
         self.fit_combo.addItem("Cover (Crop)", "cover")
         self.fit_combo.addItem("Contain (Pad)", "contain")
+        self.fit_combo.addItem("Contain White (Pad)", "contain_white")
         self.fit_combo.addItem("Stretch", "stretch")
         self.fit_combo.addItem("Center", "center")
         self.fit_combo.setToolTip(
             "How to resize to target resolution:\n"
             "• Cover: Scale + crop to fill\n"
             "• Contain: Scale + pad with black\n"
+            "• Contain White: Scale + pad with white\n"
             "• Stretch: Distort to fill\n"
             "• Center: No scale, crop/pad"
         )
