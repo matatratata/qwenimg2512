@@ -1282,3 +1282,164 @@ input[type="range"]::-moz-range-thumb {
   text-align: center;
 }
 
+/* ── Stage 05: Batch Blender Controls ──────────────────── */
+
+/* Shared form inputs used in the batch section */
+.styled-select,
+.styled-input {
+  width: 100%;
+  padding: 8px 12px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--cloud);
+  font-family: inherit;
+  font-size: 13px;
+  outline: none;
+  transition: all var(--duration) var(--ease);
+}
+.styled-select:focus,
+.styled-input:focus {
+  border-color: var(--border-focus);
+  box-shadow: 0 0 0 3px rgba(232, 200, 114, 0.08);
+}
+
+.styled-select {
+  cursor: pointer;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%236B6760' stroke-width='2' xmlns='http://www.w3.org/2000/svg'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  padding-right: 30px;
+}
+
+.styled-input::placeholder {
+  color: var(--cloud-dim);
+}
+
+/* Batch prompt textarea */
+.prompt-textarea {
+  width: 100%;
+  padding: 10px 12px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--cloud);
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.5;
+  resize: vertical;
+  min-height: 60px;
+  outline: none;
+  transition: border-color var(--duration) var(--ease),
+              box-shadow var(--duration) var(--ease);
+}
+.prompt-textarea:focus {
+  border-color: var(--border-focus);
+  box-shadow: 0 0 0 3px rgba(232, 200, 114, 0.08);
+}
+.prompt-textarea::placeholder {
+  color: var(--cloud-dim);
+}
+
+/* Camera cards container */
+#batchCameraCards {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  margin-top: 12px;
+  animation: fadeIn 300ms var(--ease);
+}
+
+/* Individual camera card */
+.batch-camera-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 12px;
+  margin-bottom: 8px;
+  background: var(--bg-surface);
+  transition: border-color 0.3s var(--ease),
+              box-shadow 0.3s var(--ease);
+}
+.batch-camera-card:hover {
+  border-color: var(--border-hover);
+}
+
+/* Camera card thumbnail images */
+.batch-camera-card .cam-thumb img {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  transition: border-color 0.2s var(--ease), transform 0.15s var(--ease);
+  object-fit: cover;
+}
+.batch-camera-card .cam-thumb:hover img {
+  border-color: var(--accent);
+  transform: scale(1.03);
+}
+
+/* Per-camera generate button */
+.batch-camera-card .cam-gen-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  padding: 6px 10px;
+  background: var(--bg-hover);
+  color: var(--cloud-muted);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all var(--duration) var(--ease);
+}
+.batch-camera-card .cam-gen-btn:hover {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-color: rgba(232, 200, 114, 0.25);
+}
+
+/* "Generate All" button  */
+#btnBatchGenerateAll {
+  padding: 10px 20px;
+  font-size: 13px;
+  font-weight: 600;
+  border-radius: var(--radius-md);
+  margin: 8px 0 12px;
+}
+
+/* Camera status badges */
+.batch-camera-card [id^="cam-status-"] {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 10px;
+  border-radius: 100px;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+  white-space: nowrap;
+  transition: background 0.3s var(--ease), color 0.3s var(--ease);
+}
+
+/* Result placeholder  */
+.batch-camera-card [id^="cam-result-"] {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.batch-camera-card [id^="cam-result-"] img {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  transition: border-color 0.2s var(--ease);
+  object-fit: cover;
+}
+.batch-camera-card [id^="cam-result-"]:hover img {
+  border-color: var(--accent);
+}
+
+/* Batch section separator heading */
+.batch-camera-card + .batch-camera-card {
+  margin-top: 0;
+}
+
