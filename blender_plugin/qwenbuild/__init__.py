@@ -650,6 +650,194 @@ class QWENBUILD_OT_create_material(bpy.types.Operator):
 
 
 # ╔══════════════════════════════════════════════════════════════════════╗
+# ║  Operator 4:  Bake Texture                                          ║
+# ╚══════════════════════════════════════════════════════════════════════╝
+
+class QWENBUILD_OT_bake_texture(bpy.types.Operator):
+    """Bake multi-camera projection material to a single UV-mapped texture"""
+    bl_idname = "qwenbuild.bake_texture"
+    bl_label = "Bake Texture"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        return "QwenBuild_AO" in bpy.data.materials and any(
+            obj.type == 'MESH' for obj in context.scene.objects)
+
+    def execute(self, context):
+        scene = context.scene
+        output_dir = bpy.path.abspath(scene.qb_output_dir)
+        resolution = scene.qb_bake_resolution
+        margin = scene.qb_bake_margin
+
+        os.makedirs(output_dir, exist_ok=True)
+
+        # Gather mesh objects that have the projection material
+        mesh_objs = [
+            obj for obj in scene.objects
+            if obj.type == 'MESH' and obj.active_material
+            and obj.active_material.name.startswith('QwenBuild_AO')
+        ]
+        if not mesh_objs:
+            self.report({'ERROR'}, "No mesh objects with QwenBuild_AO material")
+            return {'CANCELLED'}
+
+        # Save original state
+        orig_engine = scene.render.engine
+        orig_active = context.view_layer.objects.active
+        orig_selected = [o for o in context.selected_objects]
+
+        baked_files = []
+
+        try:
+            # Switch to Cycles (required for baking)
+            scene.render.engine = 'CYCLES'
+            scene.cycles.device = 'GPU'
+            scene.cycles.samples = 1  # Diffuse color bake doesn't need many samples
+            scene.cycles.use_denoising = False
+
+            for obj in mesh_objs:
+                print(f"[QwenBuild] Baking texture for {obj.name}...")
+
+                # ── Ensure UV map ──
+                if not obj.data.uv_layers:
+                    print(f"[QwenBuild]   No UV map found, running Smart UV Project...")
+                    bpy.ops.object.select_all(action='DESELECT')
+                    obj.select_set(True)
+                    context.view_layer.objects.active = obj
+                    bpy.ops.object.mode_set(mode='EDIT')
+                    bpy.ops.mesh.select_all(action='SELECT')
+                    bpy.ops.uv.smart_project(
+                        angle_limit=math.radians(66),
+                        island_margin=0.01,
+                        area_weight=0.0,
+                        correct_aspect=True,
+                    )
+                    bpy.ops.object.mode_set(mode='OBJECT')
+                    print(f"[QwenBuild]   Smart UV Project complete")
+
+                # Set the first UV map as active for baking
+                if obj.data.uv_layers:
+                    obj.data.uv_layers[0].active_render = True
+
+                # ── Create target image ──
+                img_name = f"QB_Baked_{obj.name}"
+                if img_name in bpy.data.images:
+                    bpy.data.images.remove(bpy.data.images[img_name])
+                bake_img = bpy.data.images.new(
+                    img_name, width=resolution, height=resolution,
+                    alpha=False, float_buffer=False,
+                )
+                bake_img.colorspace_settings.name = 'sRGB'
+
+                mat = obj.active_material
+                nodes = mat.node_tree.nodes
+
+                # ── Add Image Texture node as bake target ──
+                # Cycles bakes into the SELECTED Image Texture node
+                bake_node = nodes.new('ShaderNodeTexImage')
+                bake_node.image = bake_img
+                bake_node.label = 'QB_BakeTarget'
+                bake_node.location = (0, 600)
+                # Select ONLY this node (Cycles bake target)
+                for n in nodes:
+                    n.select = False
+                bake_node.select = True
+                nodes.active = bake_node
+
+                # ── Select object and bake ──
+                bpy.ops.object.select_all(action='DESELECT')
+                obj.select_set(True)
+                context.view_layer.objects.active = obj
+
+                print(f"[QwenBuild]   Baking DIFFUSE {resolution}x{resolution} (margin {margin}px)...")
+                bpy.ops.object.bake(
+                    type='DIFFUSE',
+                    pass_filter={'COLOR'},
+                    margin=margin,
+                    margin_type='EXTEND',
+                    use_clear=True,
+                )
+
+                # ── Save baked image ──
+                out_path = os.path.join(output_dir, f"{img_name}.png")
+                bake_img.filepath_raw = out_path
+                bake_img.file_format = 'PNG'
+                bake_img.save()
+                baked_files.append(out_path)
+                print(f"[QwenBuild]   Saved: {out_path}")
+
+                # ── Backup projection material ──
+                backup_name = f"{mat.name}_Projection"
+                # Remove old backup if exists
+                old_backup = bpy.data.materials.get(backup_name)
+                if old_backup:
+                    bpy.data.materials.remove(old_backup)
+                backup_mat = mat.copy()
+                backup_mat.name = backup_name
+                # Remove the bake target node from the backup
+                for n in backup_mat.node_tree.nodes:
+                    if n.label == 'QB_BakeTarget':
+                        backup_mat.node_tree.nodes.remove(n)
+                        break
+                print(f"[QwenBuild]   Backup: '{backup_name}' (fake user set)")
+                backup_mat.use_fake_user = True
+
+                # ── Strip projection material → clean BSDF ──
+                self._cleanup_material(mat, bake_img)
+                print(f"[QwenBuild]   Material cleaned → Image Texture → Principled BSDF")
+
+        except Exception as e:
+            self.report({'ERROR'}, f"Bake failed: {e}")
+            import traceback
+            traceback.print_exc()
+            scene.render.engine = orig_engine
+            return {'CANCELLED'}
+        finally:
+            # Restore state
+            scene.render.engine = orig_engine
+            bpy.ops.object.select_all(action='DESELECT')
+            for o in orig_selected:
+                if o and o.name in context.view_layer.objects:
+                    o.select_set(True)
+            if orig_active and orig_active.name in context.view_layer.objects:
+                context.view_layer.objects.active = orig_active
+
+        self.report({'INFO'},
+            f"Baked {len(baked_files)} texture(s) to {output_dir}")
+        return {'FINISHED'}
+
+    @staticmethod
+    def _cleanup_material(mat, bake_img):
+        """Strip all projection nodes, leave clean Principled BSDF + baked texture."""
+        nodes = mat.node_tree.nodes
+        links = mat.node_tree.links
+
+        # Remove ALL existing nodes
+        nodes.clear()
+
+        # Create fresh Principled BSDF
+        bsdf = nodes.new('ShaderNodeBsdfPrincipled')
+        bsdf.location = (300, 300)
+
+        # Create Material Output
+        output = nodes.new('ShaderNodeOutputMaterial')
+        output.location = (600, 300)
+        links.new(bsdf.outputs['BSDF'], output.inputs['Surface'])
+
+        # Create Image Texture with baked result
+        tex_node = nodes.new('ShaderNodeTexImage')
+        tex_node.image = bake_img
+        tex_node.location = (0, 300)
+        tex_node.label = 'Baked Texture'
+        links.new(tex_node.outputs['Color'], bsdf.inputs['Base Color'])
+
+        # Set reasonable BSDF defaults for architectural models
+        bsdf.inputs['Roughness'].default_value = 0.5
+        bsdf.inputs['Specular IOR Level'].default_value = 0.3
+
+
+# ╔══════════════════════════════════════════════════════════════════════╗
 # ║  UI Panel                                                           ║
 # ╚══════════════════════════════════════════════════════════════════════╝
 
@@ -734,6 +922,35 @@ class QWENBUILD_PT_main(bpy.types.Panel):
             info = box.row()
             info.label(text="Material 'QwenBuild_AO' active", icon="CHECKMARK")
 
+        # ── Step 4: Bake Texture ──
+        box = layout.box()
+        row = box.row()
+        row.label(text="Step 4: Bake Texture", icon="RENDER_RESULT")
+
+        row = box.row()
+        row.prop(scene, "qb_bake_resolution", text="Resolution")
+        row = box.row()
+        row.prop(scene, "qb_bake_margin", text="Margin (px)")
+
+        row = box.row()
+        row.scale_y = 1.3
+        row.operator("qwenbuild.bake_texture", icon="IMAGE_DATA")
+
+        # Show baked file status
+        if output_dir and os.path.isdir(output_dir):
+            baked = [f for f in os.listdir(output_dir) if f.startswith('QB_Baked_')]
+            if baked:
+                for bf in sorted(baked):
+                    info = box.row()
+                    info.label(text=f"{bf}", icon="CHECKMARK")
+
+        # Show backup material status
+        backups = [m.name for m in bpy.data.materials
+                   if m.name.endswith('_Projection')]
+        if backups:
+            row = box.row()
+            row.label(text=f"Backup: {', '.join(backups)}", icon="FILE_BACKUP")
+
 
 # ╔══════════════════════════════════════════════════════════════════════╗
 # ║  Registration                                                       ║
@@ -744,6 +961,7 @@ _classes = (
     QWENBUILD_OT_adjust_resolutions,
     QWENBUILD_OT_render_passes,
     QWENBUILD_OT_create_material,
+    QWENBUILD_OT_bake_texture,
     QWENBUILD_PT_main,
 )
 
@@ -773,9 +991,21 @@ def register():
         subtype='DIR_PATH',
         default="//qwenbuild_renders/",
     )
+    bpy.types.Scene.qb_bake_resolution = IntProperty(
+        name="Bake Resolution",
+        description="Texture resolution for baked output (width=height)",
+        default=2048, min=512, max=8192,
+    )
+    bpy.types.Scene.qb_bake_margin = IntProperty(
+        name="Bake Margin",
+        description="Margin in pixels around UV islands to prevent seams",
+        default=16, min=2, max=64,
+    )
 
 
 def unregister():
+    del bpy.types.Scene.qb_bake_margin
+    del bpy.types.Scene.qb_bake_resolution
     del bpy.types.Scene.qb_output_dir
     del bpy.types.Scene.qb_delete_existing
     del bpy.types.Scene.qb_exclude_bottom
