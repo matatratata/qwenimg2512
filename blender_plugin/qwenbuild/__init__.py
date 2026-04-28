@@ -672,14 +672,24 @@ class QWENBUILD_OT_bake_texture(bpy.types.Operator):
 
         os.makedirs(output_dir, exist_ok=True)
 
-        # Gather mesh objects that have the projection material
-        mesh_objs = [
-            obj for obj in scene.objects
+        # Gather mesh objects — prefer selection, fall back to all with material
+        selected_meshes = [
+            obj for obj in context.selected_objects
             if obj.type == 'MESH' and obj.active_material
             and obj.active_material.name.startswith('QwenBuild_AO')
         ]
+        if selected_meshes:
+            mesh_objs = selected_meshes
+            print(f"[QwenBuild] Baking {len(mesh_objs)} selected object(s)")
+        else:
+            mesh_objs = [
+                obj for obj in scene.objects
+                if obj.type == 'MESH' and obj.active_material
+                and obj.active_material.name.startswith('QwenBuild_AO')
+            ]
+            print(f"[QwenBuild] No selection — baking all {len(mesh_objs)} object(s) with QwenBuild_AO")
         if not mesh_objs:
-            self.report({'ERROR'}, "No mesh objects with QwenBuild_AO material")
+            self.report({'ERROR'}, "No mesh objects with QwenBuild_AO material (select objects or assign material)")
             return {'CANCELLED'}
 
         # Save original state
@@ -688,6 +698,8 @@ class QWENBUILD_OT_bake_texture(bpy.types.Operator):
         orig_selected = [o for o in context.selected_objects]
 
         baked_files = []
+        # Collect (obj, bake_img) pairs — cleanup deferred until all objects baked
+        bake_results = []
 
         try:
             # Switch to Cycles (required for baking)
@@ -733,6 +745,11 @@ class QWENBUILD_OT_bake_texture(bpy.types.Operator):
                 mat = obj.active_material
                 nodes = mat.node_tree.nodes
 
+                # ── Remove stale bake target from previous iteration ──
+                for n in list(nodes):
+                    if n.label == 'QB_BakeTarget':
+                        nodes.remove(n)
+
                 # ── Add Image Texture node as bake target ──
                 # Cycles bakes into the SELECTED Image Texture node
                 bake_node = nodes.new('ShaderNodeTexImage')
@@ -746,14 +763,43 @@ class QWENBUILD_OT_bake_texture(bpy.types.Operator):
                 nodes.active = bake_node
 
                 # ── Select object and bake ──
+                # Ensure we're in object mode first
+                if context.mode != 'OBJECT':
+                    bpy.ops.object.mode_set(mode='OBJECT')
+
+                # Force visibility — Cycles bake requires both viewport + render visible
+                obj.hide_set(False)
+                obj.hide_viewport = False
+                obj.hide_render = False
+
                 bpy.ops.object.select_all(action='DESELECT')
                 obj.select_set(True)
                 context.view_layer.objects.active = obj
 
-                print(f"[QwenBuild]   Baking DIFFUSE {resolution}x{resolution} (margin {margin}px)...")
+                # Debug: log selection state
+                print(f"[QwenBuild]   Object: {obj.name}  "
+                      f"selected={obj.select_get()}  "
+                      f"active={context.view_layer.objects.active == obj}  "
+                      f"hide={obj.hide_get()}  "
+                      f"hide_vp={obj.hide_viewport}  "
+                      f"hide_render={obj.hide_render}  "
+                      f"faces={len(obj.data.polygons)}  "
+                      f"uv_layers={len(obj.data.uv_layers)}  "
+                      f"mat={obj.active_material.name if obj.active_material else None}")
+
+                # Verify selection stuck
+                if not obj.select_get() or context.view_layer.objects.active != obj:
+                    print(f"[QwenBuild]   WARNING: Selection failed for {obj.name}, "
+                          f"object may not be in view layer. Skipping.")
+                    # Remove bake target node since we're skipping
+                    for n in list(nodes):
+                        if n.label == 'QB_BakeTarget':
+                            nodes.remove(n)
+                    continue
+
+                print(f"[QwenBuild]   Baking EMIT {resolution}x{resolution} (margin {margin}px)...")
                 bpy.ops.object.bake(
-                    type='DIFFUSE',
-                    pass_filter={'COLOR'},
+                    type='EMIT',
                     margin=margin,
                     margin_type='EXTEND',
                     use_clear=True,
@@ -765,27 +811,34 @@ class QWENBUILD_OT_bake_texture(bpy.types.Operator):
                 bake_img.file_format = 'PNG'
                 bake_img.save()
                 baked_files.append(out_path)
+                bake_results.append((obj, mat, bake_img))
                 print(f"[QwenBuild]   Saved: {out_path}")
 
-                # ── Backup projection material ──
-                backup_name = f"{mat.name}_Projection"
-                # Remove old backup if exists
-                old_backup = bpy.data.materials.get(backup_name)
-                if old_backup:
-                    bpy.data.materials.remove(old_backup)
-                backup_mat = mat.copy()
-                backup_mat.name = backup_name
-                # Remove the bake target node from the backup
-                for n in backup_mat.node_tree.nodes:
-                    if n.label == 'QB_BakeTarget':
-                        backup_mat.node_tree.nodes.remove(n)
-                        break
-                print(f"[QwenBuild]   Backup: '{backup_name}' (fake user set)")
-                backup_mat.use_fake_user = True
+            # ── Post-bake: backup and cleanup (after ALL objects done) ──
+            backed_up_mats = set()
+            for obj, mat, bake_img in bake_results:
+                # Backup projection material once per unique material
+                if mat.name not in backed_up_mats:
+                    backup_name = f"{mat.name}_Projection"
+                    old_backup = bpy.data.materials.get(backup_name)
+                    if old_backup:
+                        bpy.data.materials.remove(old_backup)
+                    backup_mat = mat.copy()
+                    backup_mat.name = backup_name
+                    for n in backup_mat.node_tree.nodes:
+                        if n.label == 'QB_BakeTarget':
+                            backup_mat.node_tree.nodes.remove(n)
+                            break
+                    backup_mat.use_fake_user = True
+                    backed_up_mats.add(mat.name)
+                    print(f"[QwenBuild]   Backup: '{backup_name}' (fake user set)")
 
-                # ── Strip projection material → clean BSDF ──
-                self._cleanup_material(mat, bake_img)
-                print(f"[QwenBuild]   Material cleaned → Image Texture → Principled BSDF")
+            # Create per-object clean materials with their own baked texture
+            for obj, mat, bake_img in bake_results:
+                clean_mat = bpy.data.materials.new(name=f"QwenBuild_Baked_{obj.name}")
+                self._cleanup_material(clean_mat, bake_img)
+                obj.active_material = clean_mat
+                print(f"[QwenBuild]   Material cleaned → Image Texture → Principled BSDF ({obj.name})")
 
         except Exception as e:
             self.report({'ERROR'}, f"Bake failed: {e}")
